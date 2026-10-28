@@ -24,4 +24,19 @@ void main() {
     tester.view.resetPhysicalSize();
     tester.view.resetDevicePixelRatio();
   });
+
+  testWidgets('face detector is closed when capture screen is disposed',
+      (tester) async {
+    var closed = false;
+    final faceService = MockFaceVerificationService(
+      (InputImage _) async => [],
+      onClose: () async => closed = true,
+    );
+    await tester.pumpWidget(
+        MaterialApp(home: FaceCaptureScreen(faceService: faceService)));
+    await tester.pump();
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    await tester.pump();
+    expect(closed, isTrue);
+  });
 }

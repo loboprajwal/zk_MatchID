@@ -31,7 +31,7 @@ void main() {
     );
     await tester.tap(find.text('Open phone verification'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).first, '+919876543210');
+    await tester.enterText(find.byType(TextField).first, '9876543210');
     await tester.pump();
     await tester.tap(find.text('Send OTP'));
     await tester.pumpAndSettle();
@@ -39,7 +39,8 @@ void main() {
     expect(otp.sentTo, '+919876543210');
     expect(storedPhone, isNull);
     for (final entry in ['1', '2', '3', '4'].asMap().entries) {
-      await tester.enterText(find.byType(TextField).at(entry.key + 1), entry.value);
+      await tester.enterText(
+          find.byType(TextField).at(entry.key + 1), entry.value);
     }
     await tester.pump();
     await tester.tap(find.text('Verify code'));
@@ -67,7 +68,7 @@ void main() {
         ),
       ),
     );
-    await tester.enterText(find.byType(TextField).first, '+919876543210');
+    await tester.enterText(find.byType(TextField).first, '9876543210');
     await tester.pump();
     await tester.tap(find.text('Send OTP'));
     await tester.pumpAndSettle();
@@ -98,7 +99,7 @@ void main() {
         ),
       ),
     );
-    await tester.enterText(find.byType(TextField).first, '+919876543210');
+    await tester.enterText(find.byType(TextField).first, '9876543210');
     await tester.pump();
     await tester.tap(find.text('Send OTP'));
     await tester.pumpAndSettle();

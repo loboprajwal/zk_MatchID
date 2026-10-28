@@ -17,6 +17,10 @@ import 'features/onboarding/data/otp_service.dart';
 import 'features/onboarding/presentation/phone_otp_screen.dart';
 import 'features/onboarding/domain/mnemonic_backup.dart';
 import 'features/onboarding/presentation/mnemonic_backup_flow.dart';
+import 'features/onboarding/domain/onboarding_flow_guard.dart';
+import 'features/onboarding/presentation/binding_success_screen.dart';
+import 'features/onboarding/presentation/wallet_setup_screen.dart';
+import 'features/onboarding/onboarding_dependencies.dart';
 import 'features/verification/credential_verification_service.dart';
 
 void main() => runApp(const MatchIdApp());
@@ -68,23 +72,29 @@ String _credentialTitle(Map<String, dynamic> data) {
 }
 
 class MatchIdApp extends StatelessWidget {
-  const MatchIdApp({super.key, this.vaultRepository});
+  const MatchIdApp(
+      {super.key, this.vaultRepository, this.onboardingDependencies});
 
   final VaultRepository? vaultRepository;
+  final OnboardingDependencies? onboardingDependencies;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'MatchID',
         debugShowCheckedModeBanner: false,
         theme: buildAppTheme(),
-        home: MatchHome(vaultRepository: vaultRepository),
+        home: MatchHome(
+            vaultRepository: vaultRepository,
+            onboardingDependencies: onboardingDependencies),
       );
 }
 
 class MatchHome extends StatefulWidget {
-  const MatchHome({super.key, this.vaultRepository});
+  const MatchHome(
+      {super.key, this.vaultRepository, this.onboardingDependencies});
 
   final VaultRepository? vaultRepository;
+  final OnboardingDependencies? onboardingDependencies;
 
   @override
   State<MatchHome> createState() => _MatchHomeState();
@@ -171,63 +181,173 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
   }
 
   Future<void> _createLocalWallet() async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Name your wallet'),
-        content: TextField(
-          controller: controller,
-          maxLength: 32,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(hintText: 'e.g. Personal wallet'),
+    final guard = OnboardingFlowGuard();
+    final phone = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => PhoneOtpScreen(
+          otpService:
+              widget.onboardingDependencies?.otpServiceFactory?.call() ??
+                  MockOtpService(),
+          onVerified: (phoneNumber) async {
+            await vault.saveVerifiedPhone(phoneNumber);
+            if (mounted) setState(() => verifiedPhone = phoneNumber);
+          },
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Create wallet'),
-          ),
-        ],
       ),
     );
-    await WidgetsBinding.instance.endOfFrame;
-    controller.dispose();
-    if (name == null) return;
-    if (name.isEmpty) {
-      _snack('Enter a name for your wallet.');
+    if (!mounted || phone == null || !guard.markPhoneVerified()) {
       return;
     }
-    final phrase = MnemonicBackup.generate();
-    final backupConfirmed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => MnemonicBackupFlow(phrase: phrase)),
+
+    final face = await Navigator.of(context).push<FaceCaptureResult>(
+      MaterialPageRoute<FaceCaptureResult>(
+        builder: (_) =>
+            widget.onboardingDependencies?.faceCaptureScreenBuilder?.call() ??
+            const FaceCaptureScreen(),
+      ),
     );
-    if (backupConfirmed != true || !mounted) return;
+    if (!mounted ||
+        face?.faceDetected != true ||
+        face?.movementChallengePassed != true ||
+        !guard.markFacePoseSequencePassed()) {
+      return;
+    }
+
+    final success = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => const BindingSuccessScreen(phoneStoredEncrypted: true),
+      ),
+    );
+    if (!mounted || success != true || !guard.continueToWalletSetup()) {
+      return;
+    }
+
+    final setup = await Navigator.of(context).push<WalletSetupResult>(
+      MaterialPageRoute<WalletSetupResult>(
+        builder: (_) =>
+            widget.onboardingDependencies?.walletSetupScreenBuilder?.call() ??
+            const WalletSetupScreen(),
+      ),
+    );
+    if (!mounted || setup == null || !guard.markWalletSetupComplete()) {
+      return;
+    }
+
+    final phrase = MnemonicBackup.generate();
+    if (!guard.canOpen(OnboardingStep.backup)) {
+      return;
+    }
+    // MnemonicBackupFlow shows the backup acknowledgement and two-word check
+    // in sequence, under FLAG_SECURE on Android.
+    final backupConfirmed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+          builder: (_) => MnemonicBackupFlow(phrase: phrase)),
+    );
+    if (!mounted ||
+        backupConfirmed != true ||
+        !guard.markBackupDisplayed() ||
+        !guard.markMnemonicConfirmed()) {
+      return;
+    }
+
     try {
-      await vault.createWallet(name,
-          mnemonicDerivedKey: base64UrlEncode(MnemonicBackup.deriveWalletKey(phrase)));
-      await vault.addActivity('Wallet created', 'Local wallet · $name');
+      await vault.createWallet(
+        setup.name,
+        mnemonicDerivedKey:
+            base64UrlEncode(MnemonicBackup.deriveWalletKey(phrase)),
+        deviceLockEnabled: setup.deviceLockEnabled,
+      );
+      await vault.addActivity('Wallet created', 'Local wallet · ${setup.name}');
       final events = await vault.readActivity();
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
-        walletName = name;
+        walletName = setup.name;
         walletCreated = true;
-        unlocked = true;
+        unlocked = !setup.deviceLockEnabled;
         activity = events;
         backupSkipped = false;
         backupCompleted = false;
       });
-      _refreshVaultLock();
+      if (setup.deviceLockEnabled) _refreshVaultLock();
       await _showBackupPhase();
     } catch (e) {
       if (mounted) _snack('Could not create wallet: ${_errorText(e)}');
     }
   }
 
-  Future<void> _showRestoreInfo() => _restoreFromBackup();
+  Future<void> _showRestoreInfo() async {
+    final method = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Restore wallet'),
+        content: const Text(
+            'Restore your wallet key with its recovery phrase, or choose the advanced encrypted file backup.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 'mnemonic'),
+              child: const Text('Recovery phrase')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, 'file'),
+              child: const Text('Advanced: file backup')),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (method == 'mnemonic') await _restoreFromMnemonic();
+    if (method == 'file') await _restoreFromBackup();
+  }
+
+  Future<void> _restoreFromMnemonic() async {
+    final phrase = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(builder: (_) => const MnemonicRestoreScreen()),
+    );
+    if (!mounted || phrase == null) return;
+    try {
+      final key = base64UrlEncode(MnemonicBackup.deriveWalletKey(phrase));
+      final existingConfig = await vault.readWalletConfig();
+      final existingCredentials = await vault.read();
+      if (existingConfig != null || existingCredentials.isNotEmpty) {
+        if (existingConfig?['mnemonicDerivedKey'] != key) {
+          _snack(
+              'A different wallet is already stored on this device. Nothing was replaced.');
+          return;
+        }
+        walletName = existingConfig?['name'] as String? ?? 'My wallet';
+      } else {
+        await vault.createWallet('Restored wallet',
+            mnemonicDerivedKey: key, deviceLockEnabled: true);
+        await vault.setBackupCompleted(true);
+        await vault.addActivity(
+            'Wallet restored', 'Recovery phrase accepted on this device');
+        walletName = 'Restored wallet';
+      }
+      final config = await vault.readWalletConfig();
+      final data = await vault.read();
+      final events = await vault.readActivity();
+      if (!mounted) return;
+      setState(() {
+        walletCreated = true;
+        walletName = config?['name'] as String? ?? walletName;
+        credentials = data;
+        activity = events;
+        unlocked = config?['deviceLockEnabled'] == false;
+        backupCompleted = true;
+        backupSkipped = false;
+        tab = 0;
+      });
+      if (unlocked) _refreshVaultLock();
+      _snack(
+          'Wallet key restored. Credentials that were stored only on another device are not included in a recovery phrase.');
+    } on FormatException catch (error) {
+      if (mounted) _snack(error.message);
+    } catch (error) {
+      if (mounted) {
+        _snack('Could not restore the recovery phrase: ${_errorText(error)}');
+      }
+    }
+  }
 
   Future<void> _showBackupPhase() async {
     while (mounted && !backupCompleted && !backupSkipped) {
@@ -238,7 +358,7 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
         builder: (dialogContext) => AlertDialog(
           title: const Text('Back up your wallet'),
           content: const Text(
-            'Create an encrypted backup file protected by a passphrase you choose. Keep both the file and passphrase somewhere safe. If this device is lost, the wallet cannot be recovered without them.',
+            'Advanced: create an encrypted .zkidbackup file protected by a passphrase. Your BIP-39 phrase remains the primary wallet key recovery path.',
           ),
           actions: [
             TextButton(
@@ -247,7 +367,7 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(dialogContext, 'backup'),
-              child: const Text('Create encrypted backup'),
+              child: const Text('Advanced: file backup'),
             ),
           ],
         ),
@@ -544,6 +664,18 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
 
   Future<void> _unlock() async {
     try {
+      final config = await vault.readWalletConfig();
+      if (config?['deviceLockEnabled'] == false) {
+        final data = await vault.read();
+        final events = await vault.readActivity();
+        if (!mounted) return;
+        setState(() {
+          credentials = data;
+          activity = events;
+          unlocked = true;
+        });
+        return;
+      }
       final auth = LocalAuthentication();
       if (!await auth.isDeviceSupported()) {
         throw Exception(
@@ -858,10 +990,10 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
         Card(
             child: ListTile(
           leading: const Icon(Icons.backup_outlined, color: AppColors.primary),
-          title: const Text('Create encrypted backup'),
+          title: const Text('Advanced: file backup'),
           subtitle: Text(backupCompleted
               ? 'Create a fresh copy of this wallet'
-              : 'Protect this wallet with a passphrase'),
+              : 'Secondary .zkidbackup restore path'),
           trailing: const Icon(Icons.chevron_right),
           onTap: _createBackup,
         )),
@@ -869,10 +1001,10 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
         Card(
             child: ListTile(
           leading: const Icon(Icons.restore, color: AppColors.primary),
-          title: const Text('Restore from backup'),
-          subtitle: const Text('Restore an encrypted wallet backup file'),
+          title: const Text('Restore wallet'),
+          subtitle: const Text('Recovery phrase or Advanced: file backup'),
           trailing: const Icon(Icons.chevron_right),
-          onTap: _restoreFromBackup,
+          onTap: _showRestoreInfo,
         )),
         const SizedBox(height: 12),
         Card(
@@ -1463,11 +1595,15 @@ class VaultStore implements VaultRepository {
   }
 
   @override
-  Future<void> createWallet(String name, {String? mnemonicDerivedKey}) => _storage.write(
+  Future<void> createWallet(String name,
+          {String? mnemonicDerivedKey, bool deviceLockEnabled = true}) =>
+      _storage.write(
         key: _walletConfigKey,
         value: jsonEncode({
           'name': name,
-          if (mnemonicDerivedKey != null) 'mnemonicDerivedKey': mnemonicDerivedKey,
+          if (mnemonicDerivedKey != null)
+            'mnemonicDerivedKey': mnemonicDerivedKey,
+          'deviceLockEnabled': deviceLockEnabled,
           'createdAt': DateTime.now().toUtc().toIso8601String(),
         }),
       );

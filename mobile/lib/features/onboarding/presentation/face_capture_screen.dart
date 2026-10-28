@@ -9,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../domain/face_pose_state_machine.dart';
+import '../domain/raw_face_frame_processor.dart';
 
 class FaceCaptureResult {
   const FaceCaptureResult({
@@ -48,15 +49,18 @@ class MlKitFaceVerificationService implements FaceVerificationService {
 }
 
 class MockFaceVerificationService implements FaceVerificationService {
-  MockFaceVerificationService(this.resultForImage);
+  MockFaceVerificationService(this.resultForImage, {this.onClose});
 
   final Future<List<Face>> Function(InputImage image) resultForImage;
+  final Future<void> Function()? onClose;
 
   @override
   Future<List<Face>> detectFaces(InputImage image) => resultForImage(image);
 
   @override
-  Future<void> close() async {}
+  Future<void> close() async {
+    await onClose?.call();
+  }
 }
 
 class FaceCaptureScreen extends StatefulWidget {
@@ -80,6 +84,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
   bool _faceCentered = false;
   final FacePoseStateMachine _poseMachine = FacePoseStateMachine();
   final FaceEmbedder _embedder = StubFaceEmbedder();
+  final RawFaceFrameProcessor _frameProcessor = RawFaceFrameProcessor();
   Timer? _poseTimer;
   int _faceCount = 0;
   String? _error;
@@ -270,12 +275,15 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
 
   void _startPoseTimer() {
     _poseTimer?.cancel();
-    if (_poseMachine.pose == FacePose.complete || _poseMachine.pose == FacePose.failed) return;
+    if (_poseMachine.pose == FacePose.complete ||
+        _poseMachine.pose == FacePose.failed) {
+      return;
+    }
     _poseTimer = Timer(FacePoseStateMachine.poseTimeout, () {
       if (!mounted) return;
       setState(() {
         _poseMachine.timeout();
-        _error = "Unable to proceed. Face match couldn't be detected.";
+        _error = 'Unable to proceed. Face match couldn’t be detected.';
       });
     });
   }
@@ -322,16 +330,28 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
       FacePose.left => 'Pose 2 of 3 · LEFT',
       FacePose.right => 'Pose 3 of 3 · RIGHT',
       FacePose.complete => 'Face poses captured',
-      FacePose.failed => "Unable to proceed. Face match couldn't be detected.",
+      FacePose.failed => 'Unable to proceed. Face match couldn’t be detected.',
     };
+  }
+
+  void _retryPoseSequence() {
+    setState(() {
+      _poseMachine.reset();
+      _faceCount = 0;
+      _faceCentered = false;
+      _error = null;
+    });
+    _startPoseTimer();
   }
 
   Future<void> _capture() async {
     final camera = _camera;
     if (!_canCapture || camera == null) return;
+    XFile? photo;
+    var retainedForReview = false;
     try {
       await camera.stopImageStream();
-      final photo = await camera.takePicture();
+      photo = await camera.takePicture();
       final capturedFaces = await _faceService.detectFaces(
         InputImage.fromFilePath(photo.path),
       );
@@ -349,6 +369,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
         return;
       }
       setState(() => _capturedImage = photo);
+      retainedForReview = true;
     } catch (_) {
       if (mounted) {
         setState(
@@ -360,6 +381,8 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
           !currentCamera.value.isStreamingImages) {
         await currentCamera.startImageStream(_processFrame);
       }
+    } finally {
+      if (!retainedForReview && photo != null) await _deletePhoto(photo);
     }
   }
 
@@ -385,14 +408,24 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
   Future<void> _confirmCapture() async {
     final photo = _capturedImage;
     if (photo == null) return;
-    final bytes = await File(photo.path).readAsBytes();
-    await _embedder.embed(bytes);
-    await _deletePhoto(photo);
-    if (mounted) {
-      Navigator.of(context).pop(const FaceCaptureResult(
-        faceDetected: true,
-        movementChallengePassed: true,
-      ));
+    try {
+      // The approved FaceEmbedder remains a stub. An empty result is accepted
+      // only as completion of the pose-capture demo, never as an identity match.
+      await _frameProcessor.computeAndDelete(photo.path, _embedder);
+      if (mounted) {
+        Navigator.of(context).pop(const FaceCaptureResult(
+          faceDetected: true,
+          movementChallengePassed: true,
+        ));
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error =
+            'Face matching is unavailable in this demo build. Retry the capture.');
+      }
+    } finally {
+      await _deletePhoto(photo);
+      if (identical(_capturedImage, photo)) _capturedImage = null;
     }
   }
 
@@ -421,6 +454,30 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
   @override
   Widget build(BuildContext context) {
     final camera = _camera;
+    if (_poseMachine.pose == FacePose.failed) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Face capture failed')),
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.face_retouching_off, size: 56),
+                const SizedBox(height: AppSpacing.lg),
+                const Text(
+                    'Unable to proceed. Face match couldn’t be detected.',
+                    textAlign: TextAlign.center),
+                const SizedBox(height: AppSpacing.lg),
+                FilledButton.icon(
+                    onPressed: _retryPoseSequence,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry')),
+              ]),
+            ),
+          ),
+        ),
+      );
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('Face capture')),
       body: SafeArea(
@@ -471,13 +528,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
               ),
             ),
             const SizedBox(height: AppSpacing.lg),
-            if (_poseMachine.pose == FacePose.failed)
-              FilledButton.icon(
-                onPressed: () => setState(() { _poseMachine.reset(); _error = null; _startPoseTimer(); }),
-                icon: const Icon(Icons.refresh),
-                label: const Text('Retry'),
-              )
-            else if (_error != null &&
+            if (_error != null &&
                 (_error!.contains('system settings') ||
                     _error!.contains('Allow it')))
               OutlinedButton.icon(

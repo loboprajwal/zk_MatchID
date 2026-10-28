@@ -30,29 +30,47 @@ class MockOtpService implements OtpService {
     if (!RegExp(r'^\+91[6-9]\d{9}$').hasMatch(phoneNumber)) {
       throw const OtpServiceException('Enter a valid +91 mobile number.');
     }
+    _refreshExpiredLock();
     if (_lockedUntil != null && _now().isBefore(_lockedUntil!)) {
       throw const OtpServiceException('Too many attempts. Try again later.');
     }
     if (_lastSent != null && _now().difference(_lastSent!) < resendDelay) {
-      throw const OtpServiceException('Wait 30 seconds before requesting another code.');
+      throw const OtpServiceException(
+          'Wait 30 seconds before requesting another code.');
+    }
+    if (_phone != phoneNumber) {
+      _attempts = 0;
+      _lockedUntil = null;
     }
     _phone = phoneNumber;
-    _attempts = 0;
     _lastSent = _now();
   }
 
   @override
   Future<bool> verifySmsCode(String phoneNumber, String code) async {
+    _refreshExpiredLock();
     if (_lockedUntil != null && _now().isBefore(_lockedUntil!)) {
       throw const OtpServiceException('Too many attempts. Try again later.');
     }
-    if (phoneNumber == _phone && code == demoCode) return true;
+    if (phoneNumber != _phone) {
+      throw const OtpServiceException(
+          'Request a code for this phone number first.');
+    }
+    if (code == demoCode) return true;
     _attempts++;
     if (_attempts >= maxAttempts) {
       _lockedUntil = _now().add(lockDuration);
-      throw const OtpServiceException('Five attempts used. Try again in 5 minutes.');
+      throw const OtpServiceException(
+          'Five attempts used. Try again in 5 minutes.');
     }
     return false;
+  }
+
+  void _refreshExpiredLock() {
+    if (_lockedUntil != null && !_now().isBefore(_lockedUntil!)) {
+      _lockedUntil = null;
+      _attempts = 0;
+    }
   }
 
   @override

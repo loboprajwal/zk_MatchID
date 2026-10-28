@@ -24,19 +24,23 @@ class PhoneOtpScreen extends StatefulWidget {
 
 class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
   late final TextEditingController _phoneController;
-  final List<TextEditingController> _codeBoxes = List.generate(4, (_) => TextEditingController());
+  final List<TextEditingController> _codeBoxes =
+      List.generate(4, (_) => TextEditingController());
   final List<FocusNode> _codeFocus = List.generate(4, (_) => FocusNode());
   Timer? _resendTimer;
+  Timer? _lockTimer;
   int _resendSeconds = 0;
+  int _lockSeconds = 0;
   int _failedAttempts = 0;
   bool _codeSent = false;
   bool _busy = false;
   bool _verified = false;
   String? _error;
 
-  String get _phone => _phoneController.text.trim();
+  String get _digits => _phoneController.text.replaceAll(RegExp(r'\D'), '');
+  String get _phone => '+91$_digits';
 
-  bool get _validPhone => RegExp(r'^\+91[6-9]\d{9}$').hasMatch(_phone);
+  bool get _validPhone => RegExp(r'^[6-9]\d{9}$').hasMatch(_digits);
 
   String get _code => _codeBoxes.map((box) => box.text).join();
   bool get _validCode => RegExp(r'^\d{4}$').hasMatch(_code);
@@ -44,11 +48,20 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
   @override
   void initState() {
     super.initState();
-    _phoneController = TextEditingController(text: widget.initialPhoneNumber);
+    final initialDigits = widget.initialPhoneNumber
+            ?.replaceAll(RegExp(r'^\+91'), '')
+            .replaceAll(RegExp(r'\D'), '') ??
+        '';
+    _phoneController = TextEditingController(text: initialDigits);
   }
 
   Future<void> _sendCode({bool resend = false}) async {
-    if (_busy || !_validPhone || (resend && _resendSeconds > 0)) return;
+    if (_busy ||
+        !_validPhone ||
+        _failedAttempts >= 5 ||
+        (resend && _resendSeconds > 0)) {
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -58,12 +71,16 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
       if (!mounted) return;
       setState(() {
         _codeSent = true;
-        _failedAttempts = 0;
-        for (final box in _codeBoxes) { box.clear(); }
+        for (final box in _codeBoxes) {
+          box.clear();
+        }
       });
       _startResendTimer();
     } on OtpServiceException catch (error) {
-      if (mounted) setState(() => _error = error.message);
+      if (mounted) {
+        setState(() => _error = error.message);
+        if (error.message.contains('Five attempts')) _startLockTimer();
+      }
     } catch (_) {
       if (mounted) {
         setState(() => _error = 'Could not send a code. Please retry.');
@@ -71,6 +88,30 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  void _startLockTimer() {
+    _lockTimer?.cancel();
+    setState(() {
+      _failedAttempts = 5;
+      _lockSeconds = 300;
+    });
+    _lockTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_lockSeconds <= 1) {
+        timer.cancel();
+        setState(() {
+          _lockSeconds = 0;
+          _failedAttempts = 0;
+          _error = null;
+        });
+      } else {
+        setState(() => _lockSeconds--);
+      }
+    });
   }
 
   void _startResendTimer() {
@@ -109,13 +150,17 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
               ? 'Too many incorrect codes. Request a new code to continue.'
               : 'That code is incorrect or expired. Check it and try again.';
         });
+        if (_failedAttempts >= 5) _startLockTimer();
         return;
       }
       await widget.onVerified(_phone);
       if (!mounted) return;
       setState(() => _verified = true);
     } on OtpServiceException catch (error) {
-      if (mounted) setState(() => _error = error.message);
+      if (mounted) {
+        setState(() => _error = error.message);
+        if (error.message.contains('attempt')) _startLockTimer();
+      }
     } catch (_) {
       if (mounted) {
         setState(() => _error = 'Could not verify this code. Please retry.');
@@ -128,9 +173,15 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
   @override
   void dispose() {
     _resendTimer?.cancel();
+    _lockTimer?.cancel();
     _phoneController.dispose();
-    for (final box in _codeBoxes) { box.clear(); box.dispose(); }
-    for (final node in _codeFocus) { node.dispose(); }
+    for (final box in _codeBoxes) {
+      box.clear();
+      box.dispose();
+    }
+    for (final node in _codeFocus) {
+      node.dispose();
+    }
     unawaited(widget.otpService.close());
     super.dispose();
   }
@@ -155,7 +206,7 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
                         style: AppTypography.sectionTitle),
                     const SizedBox(height: AppSpacing.sm),
                     Text(
-                      '${_maskPhone(_phone)} is linked to this wallet. The number is stored in secure device storage.',
+                      '${_maskPhone(_phone)} was verified and stored in secure device storage.',
                       textAlign: TextAlign.center,
                       style: AppTypography.bodySmall,
                     ),
@@ -173,7 +224,7 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         color: AppColors.surfaceMuted,
-                        borderRadius: BorderRadius.circular(AppRadius.medium),
+                        borderRadius: BorderRadius.circular(AppRadius.card),
                       ),
                       child: const Text('Demo mode: OTP simulated'),
                     ),
@@ -188,7 +239,7 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
                     Text(
                       _codeSent
                           ? 'Enter the 4-digit code sent to $_phone. Demo code: 1234.'
-                          : 'Enter your 10-digit Indian mobile number with +91.',
+                          : 'Enter your 10-digit Indian mobile number.',
                       style: AppTypography.bodySmall,
                     ),
                     const SizedBox(height: AppSpacing.lg),
@@ -200,43 +251,64 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
                       onChanged: (_) => setState(() => _error = null),
                       autofillHints: const [AutofillHints.telephoneNumber],
                       inputFormatters: [
-                        FilteringTextInputFormatter.allow(RegExp(r'[+\d]')),
-                        LengthLimitingTextInputFormatter(16),
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(10),
                       ],
                       decoration: InputDecoration(
                         labelText: 'Phone number',
-                        hintText: '+919876543210',
-                        errorText: _phone.isNotEmpty && !_validPhone
+                        prefixText: '+91 ',
+                        hintText: '9876543210',
+                        errorText: _digits.isNotEmpty && !_validPhone
                             ? 'Enter a valid +91 mobile number.'
                             : null,
                       ),
                     ),
                     if (_codeSent) ...[
                       const SizedBox(height: AppSpacing.md),
-                      Row(children: List.generate(4, (index) => Expanded(
-                        child: Padding(
-                          padding: EdgeInsets.only(right: index == 3 ? 0 : 8),
-                          child: TextField(
-                            controller: _codeBoxes[index], focusNode: _codeFocus[index],
-                            enabled: !_busy && _failedAttempts < 5,
-                            autofocus: index == 0, textAlign: TextAlign.center,
-                            keyboardType: TextInputType.number,
-                            autofillHints: index == 0 ? const [AutofillHints.oneTimeCode] : null,
-                            inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(1)],
-                            onChanged: (value) {
-                              setState(() => _error = null);
-                              if (value.isNotEmpty && index < 3) _codeFocus[index + 1].requestFocus();
-                              if (value.isEmpty && index > 0) _codeFocus[index - 1].requestFocus();
-                            },
-                            decoration: const InputDecoration(counterText: '', hintText: '•'),
-                          ),
-                        ),
-                      ))),
+                      Row(
+                          children: List.generate(
+                              4,
+                              (index) => Expanded(
+                                    child: Padding(
+                                      padding: EdgeInsets.only(
+                                          right: index == 3 ? 0 : 8),
+                                      child: TextField(
+                                        controller: _codeBoxes[index],
+                                        focusNode: _codeFocus[index],
+                                        enabled: !_busy && _failedAttempts < 5,
+                                        autofocus: index == 0,
+                                        textAlign: TextAlign.center,
+                                        keyboardType: TextInputType.number,
+                                        autofillHints: index == 0
+                                            ? const [AutofillHints.oneTimeCode]
+                                            : null,
+                                        inputFormatters: [
+                                          FilteringTextInputFormatter
+                                              .digitsOnly,
+                                          LengthLimitingTextInputFormatter(1)
+                                        ],
+                                        onChanged: (value) {
+                                          setState(() => _error = null);
+                                          if (value.isNotEmpty && index < 3) {
+                                            _codeFocus[index + 1]
+                                                .requestFocus();
+                                          }
+                                          if (value.isEmpty && index > 0) {
+                                            _codeFocus[index - 1]
+                                                .requestFocus();
+                                          }
+                                        },
+                                        decoration: const InputDecoration(
+                                            counterText: '', hintText: '•'),
+                                      ),
+                                    ),
+                                  ))),
                       const SizedBox(height: AppSpacing.sm),
                       TextButton(
-                        onPressed: _busy || _resendSeconds > 0
-                            ? null
-                            : () => _sendCode(resend: true),
+                        onPressed:
+                            _busy || _resendSeconds > 0 || _failedAttempts >= 5
+                                ? null
+                                : () => _sendCode(resend: true),
                         child: Text(_resendSeconds > 0
                             ? 'Resend code in 0:${_resendSeconds.toString().padLeft(2, '0')}'
                             : 'Resend code'),
@@ -253,6 +325,9 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
                         ),
                       ),
                     ],
+                    if (_lockSeconds > 0)
+                      Text(
+                          'Verification locked · try again in ${_lockSeconds ~/ 60}:${(_lockSeconds % 60).toString().padLeft(2, '0')}'),
                     const SizedBox(height: AppSpacing.lg),
                     FilledButton(
                       onPressed: _busy ||

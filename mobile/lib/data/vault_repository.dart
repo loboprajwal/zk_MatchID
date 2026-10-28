@@ -9,7 +9,8 @@ abstract interface class VaultRepository {
 
   Future<void> saveVerifiedPhone(String phoneNumber);
 
-  Future<void> createWallet(String name, {String? mnemonicDerivedKey});
+  Future<void> createWallet(String name,
+      {String? mnemonicDerivedKey, bool deviceLockEnabled = true});
 
   Future<void> add(Map<String, dynamic> credential);
 
