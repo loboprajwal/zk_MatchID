@@ -1,0 +1,4 @@
+{
+  "OTP_API_BASE_URL": "https://otp.example.org",
+  "CREDENTIAL_TRUST_REGISTRY_JSON": "{\"issuers\":[{\"id\":\"did:example:issuer\",\"keys\":[{\"kid\":\"did:example:issuer#key-1\",\"alg\":\"EdDSA\",\"publicKey\":\"REPLACE_WITH_BASE64URL_32_BYTE_ISSUER_PUBLIC_KEY\"}]}]}"
+}

@@ -1,0 +1,35 @@
+{
+  "@context": [
+    "https://www.w3.org/2018/credentials/v1"
+  ],
+  "id": "urn:uuid:3f8a4b2c-91d5-48ef-b32c-7e6d5a1b0c9f",
+  "type": [
+    "VerifiableCredential",
+    "UniversityStudentCredential"
+  ],
+  "issuer": {
+    "id": "did:zkmatch:university-pes",
+    "name": "State University Academic Registry"
+  },
+  "schema": {
+    "id": "schema:zkmatch:student-verification-v1",
+    "type": "JsonSchemaValidator2018"
+  },
+  "issuanceDate": "2024-08-01T00:00:00.000Z",
+  "expirationDate": "2028-08-01T00:00:00.000Z",
+  "credentialSubject": {
+    "id": "did:zkmatch:holder-local",
+    "studentId": "UNI-2024-8841",
+    "institutionId": 1042,
+    "program": "Computer Science & Engineering",
+    "birthYear": 2000,
+    "enrollmentStatus": "Active"
+  },
+  "proof": {
+    "type": "Ed25519Signature2020",
+    "created": "2024-08-01T00:00:00.000Z",
+    "verificationMethod": "did:zkmatch:university-pes#key-1",
+    "proofPurpose": "assertionMethod",
+    "signatureValue": "b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2"
+  }
+}

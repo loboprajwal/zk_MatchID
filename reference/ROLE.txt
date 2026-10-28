@@ -1,0 +1,106 @@
+ROLE
+You are a senior Flutter + Rust (mopro) engineer doing a bug-fix and completion pass on an existing app. Work directly in this repository. Do not rewrite the app; fix and complete what is broken.
+
+PROJECT
+- Repo: zk-MatchID-Kimi
+- /mobile: Flutter app
+- /mopro: Rust ZK bindings (prover.rs, verifier.rs, witness.rs, lib.rs)
+- /issuer: credential issuer service (sample_credentials)
+- Design source of truth: /mobile/design/frames.html (if present) and the existing Flutter theme/widgets. Any new screen must reuse the existing theme tokens and shared widgets. Do not change the look of existing screens and do not introduce new colors, fonts, or styles.
+- Test target: Android emulator (Pixel 4, API 36) plus a real device if possible.
+
+ISSUES TO FIX (user-reported)
+1. Backup phase cannot be skipped.
+2. There is no confirmation when skipping backup ("Confirm backup skip" step is missing).
+3. Restore frames/screens (restore-from-backup flow) are missing.
+4. OTP is not working.
+5. Face capture is not working.
+6. Issuer is not provided. DigiLocker is the intended source: ALL credential data must be taken from DigiLocker, and the flow must not depend on the /issuer service.
+7. Owner credentials are not showing up/loading.
+8. Generating proof is not working.
+9. Sharing proof is not working.
+
+STEP 0: BASELINE
+- Run `flutter doctor -v`, `flutter pub get`, `flutter analyze`, `flutter test`. Record the results.
+- Make sure `flutter run` builds on the Android emulator. If `assembleDebug` fails, fix that first (check Gradle/AGP/Kotlin/JDK/NDK versions and the mopro .so libraries/ABI filters) and report the root cause.
+
+STEP 1: TRIAGE BEFORE CODING
+Read the code for each issue and trace the full flow (UI -> state -> service/repository -> platform/network -> back to UI). For each of the 9 issues, produce a table row: Issue | Root cause (file:line) | Fix plan | Risk. Do not guess. If a cause is unclear, add temporary logging (never log secrets, OTPs, credentials, witnesses, or proofs), reproduce it, then remove the logging. Then proceed to fixes in the order below.
+
+STEP 2: FIXES
+
+A) Backup skip + skip confirmation (issues 1, 2)
+- Add a visible "Skip for now" action on the backup phase screen.
+- Tapping it opens a confirmation dialog or screen styled like the existing dialogs. It explains the risk (losing the wallet/credentials if the device is lost), with "Go back and back up" (primary) and "Skip anyway" (secondary).
+- Persist the skipped state (flutter_secure_storage or the existing persistence layer) so onboarding doesn't loop or re-block.
+- Add a non-blocking reminder to back up later (e.g. a settings entry or a banner on the home screen) so users can complete the backup afterwards.
+- Make sure navigation guards and router redirects respect the skipped state.
+
+B) Restore frames (issue 3)
+- Check frames.html for the restore screens; implement them if they are there. If they are missing, design them strictly from the existing design system.
+- Flow: entry points (onboarding "Restore existing wallet" and settings) -> choose restore method (matching whatever backup method exists, e.g. recovery phrase / file / cloud) -> input and validation -> progress -> success -> error/retry. Include all states: loading, empty, error, success.
+- Implement real restore logic that is the exact inverse of the backup logic. Verify with a round-trip test: back up, wipe local data, restore, and confirm the credentials and keys are identical.
+- Sensitive material only in flutter_secure_storage. Never log it.
+
+C) OTP (issue 4)
+- First identify which OTP this is: DigiLocker/Aadhaar mobile OTP, a custom backend OTP, or a Firebase/SMS provider. Trace it and find out why it fails. Check these causes: wrong endpoint or base URL, missing/invalid API keys or client IDs, request/response model mismatch, wrong HTTP method or headers, timeouts, cleartext/HTTPS or Android network-security-config problems, the INTERNET permission missing in AndroidManifest, the emulator not reaching localhost (use 10.0.2.2 for the host machine), SMS auto-read permissions, and state/controller bugs such as the verify button never enabling or the OTP field losing state.
+- Fix the OTP flow end to end: send OTP, 6-digit input with auto-focus and paste support, resend with a countdown timer, retry limits, a clear error message for wrong/expired OTP, loading and disabled states, and no double submits.
+- Add a dev/sandbox mode that is clearly switchable via config (--dart-define) so I can test without a real SMS. It must be impossible to ship enabled in release builds.
+
+D) Face capture (issue 5)
+- Trace the current implementation. Check these causes: camera permission not requested or denied (and no handling for permanently denied), missing Android CAMERA permission/feature entries and iOS NSCameraUsageDescription, camera plugin version or minSdk problems, front camera not selected, controller not initialized/disposed properly, the preview not showing, an image-orientation/rotation bug, the capture result never reaching the next screen, and emulator camera not configured (set the virtual scene or webcam in AVD settings, and tell me what to configure).
+- Implement a robust face capture screen in the existing design: permission rationale, a live front-camera preview with a face-guide overlay, real-time face detection (google_mlkit_face_detection or equivalent) that tells the user to center the face, good lighting, etc., a capture button enabled only when a single face is detected, a retake/confirm step, and error states.
+- If the app needs a liveness or face-match step, implement it behind a `FaceVerificationService` interface with a working implementation and a mock for tests. Keep face images in memory or secure storage only, never log them, and delete temporary files after use.
+- Block screenshots on this screen if that is consistent with the app's security setup.
+
+E) DigiLocker as the sole data source (issues 6, 7)
+- Remove the runtime dependency on /issuer. All credential data must come from DigiLocker. Keep the issuer code in the repo, but hide it behind the repository interface so it can't be hit by accident.
+- Implement a `DigiLockerRepository` (domain interface + data implementation) using DigiLocker's official partner APIs (API Setu / DigiLocker). Verify against the CURRENT official documentation before coding:
+  - OAuth 2.0 authorization code flow with PKCE, launched via an in-app browser or custom tab (flutter_appauth or equivalent), with a correct redirect URI and deep-link/intent-filter setup on Android and iOS.
+  - Token exchange, secure token storage, refresh, expiry handling, and logout.
+  - Fetch the user's profile/issued documents list and the document data needed by the app (e.g. identity attributes), then parse them into domain entities.
+  - Client secrets must NOT be embedded in the mobile app. If the flow requires a secret, do the token exchange through a thin backend (use the existing /issuer folder or a small new service for this proxy role only), and document it.
+  - Config via --dart-define / .env.example (client ID, redirect URI, base URL, sandbox vs. production). No hard-coded keys.
+- Fix "owner credentials not coming": trace how owner/holder credentials are loaded and shown (repository -> state -> UI list/detail). Check these causes: an empty or failing fetch swallowed by try/catch, parsing/model mismatch, wrong DigiLocker scope or missing permissions at consent, the token not attached to requests, data not persisted after fetch, the UI reading from a different state source, and an error state that renders as "empty". Make the credential list and detail screens show real DigiLocker data, with proper loading, empty, error (with retry), and pull-to-refresh states.
+- Map DigiLocker data into the credential/witness input format that the mopro circuit expects. Document the mapping (which DigiLocker field feeds which circuit input) in the README.
+
+F) Proof generation (issue 8)
+- Trace the path: UI -> ProofController -> ZkProofService -> mopro FFI -> prover.rs/witness.rs. Check these causes: missing or mismatched native .so / ABI libraries (arm64-v8a, armeabi-v7a, x86_64), the mopro bindings not rebuilt after Rust changes (run scripts/build_mobile.sh or the .ps1), witness-input format errors, proving/verification key or circuit assets missing from pubspec assets or the wrong asset path, the FFI call blocking or crashing the UI thread, unhandled exceptions or panics in Rust, memory limits on large circuits, and credential inputs being null because of issue 7.
+- Run generation off the UI thread (Isolate), with real progress states, cancellation, a timeout, and clear error messages mapped from Rust errors.
+- Verify the proof locally with verifier.rs immediately after generating it, and only show success if verification passes. Add Rust unit tests and a Dart integration test for generate -> verify using sample data.
+
+G) Share proof (issue 9; also covers "generating and sharing proof")
+- Check why sharing fails. Common causes: the proof is never serialized or is empty, a wrong file path or temp-directory file not created before sharing, missing Android FileProvider config (paths XML + manifest provider), a wrong MIME type, share_plus usage errors, a QR payload that is too large, and the share sheet called before the proof is ready.
+- Implement sharing properly:
+  - A compact, versioned proof package (JSON) with the proof, public inputs, the verifier/circuit identifier, a timestamp, and an expiry. It must contain no raw personal data beyond what the proof's public inputs need.
+  - Share options in the existing UI style: system share sheet (file/text), copy to clipboard, and a QR code when the payload fits (with a fallback to file share when it doesn't).
+  - A "verify received proof" path so the other party can check it (using the existing verifier flow), with success and failure screens.
+  - Handle errors: a failed share, user cancellation, and an expired proof.
+
+STEP 3: CONSISTENCY AND QUALITY
+- Match the existing design system exactly for every new or changed screen. Reuse the shared widgets, with no hard-coded colors, sizes, or fonts.
+- Each new/changed screen needs loading, empty, error, and success states, SafeArea/keyboard handling, and text scaling up to 1.5x without overflow.
+- Add accessibility labels, 48x48 minimum tap targets, and localized strings (ARB) instead of hard-coded text.
+- Never log or persist sensitive data (OTP, tokens, credentials, face images, witnesses, proofs) outside secure storage. Release builds must not contain debug/sandbox bypasses.
+- Keep the architecture clean: UI -> controller/state -> use case -> repository interface -> data source.
+
+STEP 4: TESTS AND VERIFICATION
+- Unit tests: backup-skip state, restore round-trip, OTP controller (success, wrong, expired, resend), DigiLocker repository (mock HTTP: success, 401, empty, malformed), proof package serialization.
+- Widget tests: backup skip confirmation, OTP screen, face capture states, credential list states.
+- Integration test for the main flow: onboarding -> skip backup (confirm) -> DigiLocker login -> OTP -> face capture -> credentials appear -> generate proof -> verify -> share.
+- Run `flutter analyze` (zero warnings), `dart format`, and `flutter test`. Fix everything that fails.
+- Verify a release build compiles: `flutter build apk --release`.
+
+STRICT RULES
+1. Do not change the look of existing screens beyond the requested fixes.
+2. No placeholders: no "TODO", "coming soon", dummy buttons, or mocked data in production code paths. Mocks only behind interfaces for tests/dev mode.
+3. Deliver complete, compilable code with all imports and pubspec entries and pinned versions. Justify any new package in one line.
+4. If something is ambiguous (e.g. which backup method exists), inspect the code, pick the most reasonable option, state the assumption in one line, and continue.
+5. Do not break the existing mopro, issuer, or mobile builds.
+
+OUTPUT FORMAT
+1. The triage table (Issue | Root cause | Fix).
+2. Changes grouped by issue, with file paths.
+3. How to run and test each fix (exact commands, plus emulator settings such as camera and network).
+4. A final checklist for all 9 issues, marked Fixed or Needs-input, with an explicit list of anything that needs credentials from me (DigiLocker client ID/secret, redirect URI, OTP provider keys).
+Work step by step: one-line status after each step, then continue.

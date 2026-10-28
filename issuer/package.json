@@ -1,0 +1,10 @@
+{
+  "name": "zk-matchid-issuer",
+  "version": "1.0.0",
+  "description": "Mock Trusted Issuer Service for zk-MatchID Verifiable Credentials",
+  "main": "src/issuer_service.js",
+  "scripts": {
+    "issue": "node src/issuer_service.js"
+  },
+  "license": "MIT"
+}
