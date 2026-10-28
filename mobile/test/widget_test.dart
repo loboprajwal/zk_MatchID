@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zk_match_id/main.dart';
@@ -116,3 +117,19 @@ class _TestVaultRepository implements VaultRepository {
   @override
   Future<void> restoreBackupSnapshot(Map<String, dynamic> snapshot) async {}
 }
+=======
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mobile/main.dart';
+
+void main() {
+  testWidgets('zk-MatchID App renders navigation tabs smoke test',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(const ZkMatchIdApp());
+
+    expect(find.text('Vault'), findsOneWidget);
+    expect(find.text('Prover'), findsOneWidget);
+    expect(find.text('Verifier'), findsOneWidget);
+    expect(find.text('Benchmark'), findsOneWidget);
+  });
+}
+>>>>>>> 017065faef1486607dd045e1cf3c06c4fb72c3e0

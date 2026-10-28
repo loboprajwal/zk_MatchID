@@ -1,4 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<<<<<<< HEAD
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
@@ -7,6 +8,13 @@
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
     <application
         android:label="MatchID"
+=======
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <application
+        android:label="zk-MatchID"
+>>>>>>> 017065faef1486607dd045e1cf3c06c4fb72c3e0
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

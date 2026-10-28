@@ -1,0 +1,175 @@
+# zk-MatchID: Generic Multi-Predicate Zero-Knowledge Verification Prompts
+*Enterprise & Academic AI Vibe-Coding Prompts for Real-World Identity Verification*
+
+---
+
+## Architecture Overview & Real-World Pain Points Addressed
+
+Current identity verification systems suffer from catastrophic over-disclosure, surveillance tracking, and fraud vulnerabilities:
+1. **The Over-Disclosure Problem (Nightlife, Venues, Retail):** Users hand over physical government IDs to prove age or adult status, needlessly exposing their full legal name, exact date of birth, home address, and document numbers.
+2. **The Financial Privacy Leak (Rental Housing & Loans):** Tenants upload unencrypted bank statements, pay stubs, and tax filings to prove income solvency ($Income \ge \$4,000/\text{mo}$ or $CreditScore \ge 700$), exposing them to identity theft and database leaks.
+3. **The Centralized Tracking Dilemma (Student & Civic Membership):** Validating eligibility for student discounts, municipal subsidies, or professional licenses traditionally requires "phoning home" to centralized APIs, creating invasive surveillance logs of user activity.
+4. **The Static Replay & Document Tampering Vulnerability:** Scanned PDFs or static QR codes can be easily forged, screenshotted, or replayed by unauthorized parties.
+
+zk-MatchID solves these pain points by providing a **Generic, Multi-Predicate Zero-Knowledge Verification Engine** that evaluates predicates locally on-device without disclosing underlying private attributes.
+
+---
+
+## Phase 1: Generic Multi-Predicate Circuit Engineering
+Prompt your agent to create the generic Circom cryptographic circuits.
+
+### PROMPT 1: GENERIC PREDICATE ZK CIRCUIT
+**System:** You are an expert Zero-Knowledge Cryptography Engineer.
+
+**Task:** Write a generic Circom 2.1 circuit named `generic_verifier.circom` that supports multiple real-world predicate types (range thresholds, set membership, validity windows, and anti-replay session binding).
+
+**Requirements:**
+1. **Circuit Parameters & Inputs:**
+   - **Private Inputs:**
+     - `attributeValue` (field element / 32-bit integer: e.g., birthYear, monthlyIncome, creditScore, or institutionId).
+     - `userSecretKey` (private cryptographic seed for nullifier generation).
+     - `credentialExpiry` (integer timestamp: expiry date of credential).
+   - **Public Inputs:**
+     - `predicateMode` (integer flag: `1` = Range/Threshold (`attributeValue >= thresholdA`), `2` = AllowedSetMembership, `3` = DerivedThreshold age derivation (`thresholdB - attributeValue >= thresholdA`)).
+     - `thresholdA` (integer: e.g., minAge, minIncome, minScore, or minAllowedValue).
+     - `thresholdB` (integer: e.g., maxScore or currentYear for age derivation).
+     - `allowedSet[5]` (array of 5 field elements representing whitelisted institution / jurisdiction IDs for set membership mode).
+     - `currentTimestamp` (integer: current year or Unix timestamp for expiry validation).
+     - `sessionNonce` (field element: ephemeral challenge from the verifier).
+2. **Cryptographic Constraints:** (Constraints 1 and 5 are enforced unconditionally in **every** mode — validity and anti-replay can never be exempted.)
+   - **Constraint 1 (Validity & Expiry Check):** Enforce `credentialExpiry >= currentTimestamp` using Circomlib's `GreaterEqThan(32)` so expired credentials can never yield a valid proof.
+   - **Constraint 2 (Range / Threshold Evaluation):** When `predicateMode == 1`, calculate difference and enforce `attributeValue >= thresholdA` using `GreaterEqThan(32)`. Bounded ranges `min <= attributeValue <= max` are expressed by pairing the mode-1 lower bound with the mode-3 upper bound (`thresholdB - attributeValue >= 0`).
+   - **Constraint 3 (Set Membership Evaluation):** When `predicateMode == 2`, prove `attributeValue` equals at least one element in `allowedSet[0..4]` by calculating $\prod_{i=0}^{4} (attributeValue - allowedSet[i]) == 0$.
+   - **Constraint 4 (Derived Threshold / Age Evaluation):** When `predicateMode == 3`, derive `age = thresholdB - attributeValue` and enforce `age >= thresholdA` using `GreaterEqThan(32)` (e.g., `currentYear - birthYear >= ageLimit`).
+   - **Constraint 5 (Session Nullifier):** Compute public output `nullifier = Poseidon(userSecretKey, sessionNonce)` to bind the proof to the session and prevent replay attacks.
+   - **Mode Enforcement:** Gate each mode check with multiplexer factors such as `(predicateMode - 2) * (predicateMode - 3)` so a prover can only skip the checks belonging to inactive modes — never the expiry or nullifier constraints.
+3. **Outputs:**
+   - Public output: `nullifier`
+4. Provide cross-platform compilation scripts `compile_circuit.sh` and `compile_circuit.ps1` that compile the circuit to R1CS, download Powers of Tau, generate a Groth16 zkey, and export `verification_key.json`.
+
+---
+
+## Phase 2: Mopro Native Proving Engine for Generic Predicates
+Prompt your agent to bridge the generic Circom circuit into native Rust mobile libraries using Mopro.
+
+### PROMPT 2: MOPRO UNIVERSAL PROVING WRAPPER
+**System:** You are a Mobile Rust & Cryptography Integration Specialist.
+
+**Task:** Build a universal Rust proving wrapper interfacing with the generic circuit via Mopro and UniFFI / C-ABI.
+
+**Requirements:**
+1. Configure `Cargo.toml` with `mopro-ffi`, `ark-groth16`, `ark-bn254`, and `serde`.
+2. Implement a high-performance prover function:
+   ```rust
+   pub fn generate_generic_proof(
+       attribute_value: u64,
+       user_secret: &str,
+       credential_expiry: u64,
+       predicate_mode: u32,
+       threshold_a: u64,
+       threshold_b: u64,
+       allowed_set: Vec<u64>,
+       current_timestamp: u64,
+       session_nonce: &str,
+       issuer_reference: &str
+   ) -> Result<String, String>;
+   ```
+3. Implement `verify_generic_proof(proof_json, verification_key) -> Result<bool, String>` running Groth16 bilinear pairing checks over BN254.
+4. Export C-ABI symbols (`ffi_generate_generic_proof`, `ffi_verify_generic_proof`, `ffi_free_string`) for seamless invocation from Flutter's `dart:ffi`.
+5. Optimize memory allocations to maintain $< 2.0$ second execution time on mobile devices.
+
+---
+
+## Phase 3: Blockchain Decentralized Trust Layer
+Prompt your agent to build the smart contracts managing decentralized issuer trust and revocations.
+
+### PROMPT 3: DECENTRALIZED MULTI-SCHEMA & REVOCATION REGISTRY
+**System:** You are an EVM Smart Contract Security Engineer.
+
+**Task:** Build the blockchain registry layer in Solidity 0.8.20 managing authorized issuers, credential schemas, and non-revocation accumulators without storing any personal data.
+
+**Requirements:**
+1. **`IssuerRegistry.sol`**:
+   - Manage whitelisted identity providers across sectors: Government (Aadhaar, Passport), Academic (Universities), Financial (Banks, Tax Authorities), and Healthcare.
+   - Store issuer public keys, metadata URIs, and status flags.
+2. **`CredentialSchemaRegistry.sol`**:
+   - Register standardized schema definitions:
+     - `AgeCredentialSchema` (predicate: $age \ge 18$)
+     - `FinancialSolvencySchema` (predicate: $income \ge \$4,000$, $credit \ge 700$)
+     - `AcademicMembershipSchema` (predicate: $institution \in Whitelist$)
+     - `CivicResidencySchema` (predicate: $jurisdiction \in EligibleRegions$)
+3. **`RevocationRegistry.sol`**:
+   - Implement Merkle accumulator root storage and cryptographic revocation lists (CRLs).
+   - Enable issuers to revoke compromised or terminated credentials without disclosing user identities.
+4. Include Hardhat configuration and automated tests verifying contract safety.
+
+---
+
+## Phase 4: Multi-Issuer Credential Service & Mock Data
+Prompt your agent to create the institutional credential issuing service.
+
+### PROMPT 4: INSTITUTIONAL CREDENTIAL ISSUANCE SERVICE
+**System:** You are a Verifiable Credential & Decentralized Identity Engineer.
+
+**Task:** Build an institutional credential issuing service `issuer_service.js` that generates W3C-compliant Verifiable Credentials for real-world scenarios.
+
+**Requirements:**
+1. Implement issuance for distinct credential schemas:
+   - **Government Identity VC:** attributes: `documentType`, `birthYear`, `dateOfBirth`, `nationality`.
+   - **Financial Solvency VC:** attributes: `monthlyIncome`, `creditScore`, `employmentStatus`.
+   - **Academic Enrollment VC:** attributes: `institutionId`, `degreeProgram`, `enrollmentStatus`.
+   - **Professional License VC:** attributes: `licenseCategory`, `licenseStatus`, `expiryDate`.
+2. Cryptographically sign all credentials using issuer keys (`Ed25519Signature2020` / `EcdsaSecp256k1`).
+3. Export pre-signed JSON sample credentials into `issuer/sample_credentials/` for mobile vault onboarding.
+
+---
+
+## Phase 5: Mobile UI, Dynamic Profile Engine & QR Handshake
+Prompt your agent to build the Flutter mobile client supporting multi-profile selective disclosure.
+
+### PROMPT 5: MULTI-PROFILE MOBILE APP & QR HANDSHAKE
+**System:** You are a Lead Cross-Platform Mobile Engineer.
+
+**Task:** Build the Flutter mobile app enabling users to selectively prove diverse claims and allowing verifiers to enforce dynamic policies offline.
+
+**Requirements:**
+1. **Identity Vault (`VaultScreen`):**
+   - Store and display multi-sector Verifiable Credentials (Government, University, Financial).
+   - Display cryptographic signatures, issuer verification badges, and validity timers.
+   - Gated by native biometric hardware (KeyStore / Face ID).
+2. **Generic Prover Engine (`ProverScreen`):**
+   - Provide preset real-world verification profiles:
+     - **Profile 1: Adult Status (18+ / 21+)** - Prove age threshold without revealing DOB.
+     - **Profile 2: Tenant Solvency** - Prove monthly income $\ge \$4,000$ and credit score $\ge 700$ without revealing bank balances.
+     - **Profile 3: University Student Perk** - Prove active enrollment at an accredited institution without revealing student ID.
+     - **Profile 4: Regional Civic Residency** - Prove state/region membership without revealing street address.
+   - Dynamic Base85 QR encoding with ephemeral session nonce and TTL.
+3. **Relying Party Offline Verifier (`VerifierScreen`):**
+   - Configure required verification policies.
+   - Generate dynamic challenge nonce QR.
+   - Offline camera scanner parsing Base85 QR, evaluating Groth16 pairings, and validating issuer authorization against the local blockchain cache.
+   - Display minimal result card (e.g., `"VERIFIED: Income Solvency Met ✓"`) with zero PII disclosed.
+
+---
+
+## Phase 6: Academic Benchmarking Suite & Paper Data Collector
+Prompt your agent to build the research metric collection engine comparing multi-predicate performance.
+
+### PROMPT 6: RESEARCH BENCHMARKING ENGINE
+**System:** You are a Cryptographic Performance Benchmarking Specialist.
+
+**Task:** Build an automated benchmarking suite inside the mobile app to collect comparative academic metrics across diverse predicate types.
+
+**Requirements:**
+1. Benchmark 50 cycles for each predicate type:
+   - Simple Threshold Proof (Age $\ge 18$).
+   - High-Precision Numeric Range Proof (Income Solvency: 32-bit comparisons).
+   - Multi-Element Set Membership Proof (5-element polynomial evaluation).
+2. Measure and log:
+   - Witness generation latency (ms).
+   - Groth16 proof generation latency (ms).
+   - On-device verification latency (ms).
+   - Compression efficiency (Raw JSON vs Base85 QR bytes).
+   - Peak mobile RAM utilization (MB).
+3. Export comprehensive comparative metrics to `benchmark_results.csv` on mobile storage for academic papers and thesis presentations.
+4. Render interactive graphs on `BenchmarkDashboard`.

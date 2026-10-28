@@ -1,0 +1,6 @@
+[ ] 1. CIRCUIT COMPILED: Circom produces R1CS without constraint errors.
+[ ] 2. NATIVE BINDINGS: Mopro builds iOS (.xcframework) and Android (.so) libs without missing symbols.
+[ ] 3. OFFLINE OPERATION: Enable Airplane Mode on both devices.
+[ ] 4. VERIFICATION TEST: Prover generates proof in < 2.0s; Verifier successfully verifies proof.
+[ ] 5. ANTI-REPLAY TEST: Attempting to scan a recorded QR code twice fails due to nonce validation.
+[ ] 6. ZERO-KNOWLEDGE TEST: Inspect QR payload JSON—verify no instance of `birthYear` or full DOB appears.

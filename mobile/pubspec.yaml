@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 name: zk_match_id
 description: "Privacy-preserving identity verification"
 # The following line prevents the package from being accidentally published to
@@ -41,10 +42,33 @@ dependencies:
   camera: 0.10.6
   google_mlkit_face_detection: 0.14.0
   permission_handler: 12.0.3
+=======
+name: mobile
+description: "zk-MatchID Offline-First Mobile Mutual Authentication"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  ffi: ^2.1.2
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^5.2.3
+  flutter_secure_storage: ^9.2.2
+  path_provider: ^2.1.4
+  csv: ^6.0.0
+  crypto: ^3.0.3
+>>>>>>> 017065faef1486607dd045e1cf3c06c4fb72c3e0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+<<<<<<< HEAD
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -94,3 +118,11 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+=======
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
+>>>>>>> 017065faef1486607dd045e1cf3c06c4fb72c3e0

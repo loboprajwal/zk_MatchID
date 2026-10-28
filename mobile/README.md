@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # MatchID mobile
 
 Flutter client for a local credential wallet and experimental privacy-preserving identity proof workflow. This checkout is not ready for real identity decisions: DigiLocker access is not configured, the Flutter app has no generated Mopro bridge, and verification intentionally fails closed.
@@ -51,3 +52,21 @@ Run the SMS gateway using `../otp/README.md`. Configure the mobile build with `-
 ## Release status
 
 Do not publish a release from the current Gradle signing configuration: release builds currently use the debug signing key. Production signing, ABI-specific Mopro builds, audited proving/verifying keys, issuer trust configuration, release obfuscation, and platform security review must be completed first. The app requests camera access for QR scanning and biometric permissions for local vault unlock.
+=======
+# mobile
+
+A new Flutter project.
+
+## Getting Started
+
+This project is a starting point for a Flutter application.
+
+A few resources to get you started if this is your first Flutter project:
+
+- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
+- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+
+For help getting started with Flutter development, view the
+[online documentation](https://docs.flutter.dev/), which offers tutorials,
+samples, guidance on mobile development, and a full API reference.
+>>>>>>> 017065faef1486607dd045e1cf3c06c4fb72c3e0
