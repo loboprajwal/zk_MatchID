@@ -1,0 +1,33 @@
+{
+  "@context": [
+    "https://www.w3.org/2018/credentials/v1"
+  ],
+  "id": "urn:uuid:9b4d2e77-5c31-4a86-9f2d-6e8a1c3b5d7f",
+  "type": [
+    "VerifiableCredential",
+    "CivicResidencyCredential"
+  ],
+  "issuer": {
+    "id": "did:zkmatch:municipal-bda",
+    "name": "Bengaluru Municipal Authority"
+  },
+  "schema": {
+    "id": "schema:zkmatch:civic-residency-v1",
+    "type": "JsonSchemaValidator2018"
+  },
+  "issuanceDate": "2024-03-01T00:00:00.000Z",
+  "expirationDate": "2032-03-01T00:00:00.000Z",
+  "credentialSubject": {
+    "id": "did:zkmatch:holder-local",
+    "jurisdictionCode": 29,
+    "district": "Bengaluru Urban",
+    "residencyStatus": "Active"
+  },
+  "proof": {
+    "type": "Ed25519Signature2020",
+    "created": "2024-03-01T00:00:00.000Z",
+    "verificationMethod": "did:zkmatch:municipal-bda#key-1",
+    "proofPurpose": "assertionMethod",
+    "signatureValue": "d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8"
+  }
+}

@@ -1,0 +1,26 @@
+[package]
+name = "mopro"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mopro_bindings"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+mopro-ffi = { version = "=0.1.1", features = ["circom"] }
+circom-prover = "=0.1.0"
+rust-witness = "0.1.6"
+ark-bn254 = "0.4.0"
+ark-ec = "=0.4.1"
+ark-ff = "=0.4.1"
+ark-groth16 = "0.4.0"
+ark-snark = "0.4.0"
+ark-serialize = "=0.4.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "1.0"
+
+[build-dependencies]
+rust-witness = "0.1.6"

@@ -1,0 +1,21 @@
+{
+  "name": "zk-matchid-circuits",
+  "version": "1.0.0",
+  "description": "Circom 2.1 zero-knowledge circuits for zk-MatchID offline mobile authentication",
+  "main": "index.js",
+  "scripts": {
+    "compile": "bash scripts/compile_circuit.sh",
+    "compile:windows": "powershell -ExecutionPolicy Bypass -File scripts/compile_circuit.ps1",
+    "test": "mocha tests/**/*.test.js --timeout 60000"
+  },
+  "dependencies": {
+    "circomlib": "^2.0.5",
+    "circomlibjs": "^0.1.7",
+    "snarkjs": "^0.7.5"
+  },
+  "devDependencies": {
+    "chai": "^4.3.7",
+    "mocha": "^10.2.0"
+  },
+  "license": "MIT"
+}

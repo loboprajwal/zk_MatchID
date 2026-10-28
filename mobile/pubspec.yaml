@@ -1,0 +1,39 @@
+name: zk_match_id
+description: "Privacy-preserving identity verification"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  ffi: ^2.1.2
+  flutter_secure_storage: 9.2.4
+  local_auth: 2.3.0
+  file_picker: 10.3.10
+  mobile_scanner: 6.0.11
+  qr_flutter: 4.1.0
+  cross_file: 0.3.5+2
+  cryptography: 2.9.0
+  share_plus: 10.1.4
+  camera: 0.10.6
+  google_mlkit_face_detection: 0.14.0
+  permission_handler: 12.0.3
+  path_provider: 2.1.5
+  csv: 6.0.0
+  crypto: 3.0.6
+  bip39: 1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/

@@ -1,0 +1,20 @@
+# Mopro configuration for zk-MatchID
+
+[build]
+# Mobile platforms to target
+platforms = ["ios", "android"]
+
+[android]
+# Target architectures for Android
+architectures = ["arm64-v8a", "armeabi-v7a", "x86_64"]
+ndk_version = "25.2.9519653"
+
+[ios]
+# Architectures for iOS device and simulator
+architectures = ["aarch64-apple-ios", "aarch64-apple-ios-sim", "x86_64-apple-ios"]
+
+[circuit]
+name = "generic_verifier"
+r1cs = "assets/generic_verifier.r1cs"
+zkey = "assets/generic_verifier_final.zkey"
+vkey = "assets/verification_key.json"

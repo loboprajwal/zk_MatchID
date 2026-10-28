@@ -1,0 +1,34 @@
+{
+  "@context": [
+    "https://www.w3.org/2018/credentials/v1"
+  ],
+  "id": "urn:uuid:5d8e7a6b-9c21-4f3e-8a0b-1d2e3f4a5b6c",
+  "type": [
+    "VerifiableCredential",
+    "FinancialSolvencyCredential"
+  ],
+  "issuer": {
+    "id": "did:zkmatch:bank-apex",
+    "name": "Apex National Bank & Credit Authority"
+  },
+  "schema": {
+    "id": "schema:zkmatch:financial-solvency-v1",
+    "type": "JsonSchemaValidator2018"
+  },
+  "issuanceDate": "2024-06-01T00:00:00.000Z",
+  "expirationDate": "2030-06-01T00:00:00.000Z",
+  "credentialSubject": {
+    "id": "did:zkmatch:holder-local",
+    "accountCategory": "VerifiedSalaryAccount",
+    "monthlyIncome": 5200,
+    "creditScore": 760,
+    "solvencyStatus": "Approved"
+  },
+  "proof": {
+    "type": "Ed25519Signature2020",
+    "created": "2024-06-01T00:00:00.000Z",
+    "verificationMethod": "did:zkmatch:bank-apex#key-1",
+    "proofPurpose": "assertionMethod",
+    "signatureValue": "c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4"
+  }
+}
