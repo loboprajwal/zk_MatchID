@@ -22,6 +22,7 @@ import 'features/onboarding/presentation/binding_success_screen.dart';
 import 'features/onboarding/presentation/wallet_setup_screen.dart';
 import 'features/onboarding/onboarding_dependencies.dart';
 import 'features/verification/credential_verification_service.dart';
+import 'features/verification/credential_wallet_matcher.dart';
 
 void main() => runApp(const MatchIdApp());
 
@@ -707,10 +708,74 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
 
   Future<void> _importCredential() async {
     if (!mounted) return;
-    await _showUnavailableScreen(
-      'Connect DigiLocker',
-      'Credential import is restricted to DigiLocker. This app build needs an approved requester client ID, redirect URI, scopes, and current API Setu integration details before it can connect. No credential was imported.',
+    if (!unlocked) {
+      _snack('Unlock your wallet before adding a credential.');
+      return;
+    }
+    final source = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Wrap(children: [
+          const ListTile(
+            title: Text('Add a DigiLocker credential'),
+            subtitle: Text('Scan its QR or select the JSON export.'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.qr_code_scanner),
+            title: const Text('Scan credential QR'),
+            onTap: () => Navigator.pop(sheetContext, 'scan'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.upload_file_outlined),
+            title: const Text('Choose DigiLocker JSON file'),
+            onTap: () => Navigator.pop(sheetContext, 'file'),
+          ),
+        ]),
+      ),
     );
+    if (!mounted || source == null) return;
+    try {
+      String raw;
+      if (source == 'scan') {
+        final value = await Navigator.of(context).push<String>(
+          MaterialPageRoute<String>(
+            builder: (_) => const CredentialQrCaptureScreen(),
+          ),
+        );
+        if (value == null) return;
+        raw = value;
+      } else {
+        final selection = await FilePicker.platform.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: const ['json'],
+          allowMultiple: false,
+          withData: true,
+        );
+        if (selection == null || selection.files.isEmpty) return;
+        final file = selection.files.single;
+        final bytes = file.bytes;
+        if (bytes == null || bytes.length > 2 * 1024 * 1024) {
+          throw const FormatException('Choose a JSON file up to 2 MB.');
+        }
+        raw = utf8.decode(bytes);
+      }
+      final presented = PresentedCredential.decode(raw);
+      final credential = Map<String, dynamic>.from(presented.credential)
+        ..['_matchidSourcePayload'] = raw;
+      await vault.add(credential);
+      await _recordActivity('Credential added',
+          '${_credentialTitle(credential)} · ${presented.source}');
+      if (mounted) {
+        _snack('Credential added to $walletName. Check it in Verify.');
+        final data = await vault.read();
+        setState(() => credentials = data);
+      }
+    } on FormatException catch (e) {
+      if (mounted) _snack(e.message);
+    } catch (e) {
+      if (mounted) _snack('Could not add credential: ${_errorText(e)}');
+    }
   }
 
   Future<void> _remove(int index) async {
@@ -858,7 +923,7 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
                       fontWeight: FontWeight.w700,
                       letterSpacing: -.4))),
           IconButton.filledTonal(
-              tooltip: 'Connect DigiLocker',
+              tooltip: 'Add credential from QR or JSON',
               onPressed: _importCredential,
               icon: const Icon(Icons.add)),
           IconButton(
@@ -896,7 +961,7 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
               icon: Icons.description_outlined,
               title: 'No credentials yet',
               text:
-                  'Connect DigiLocker to retrieve your issued credentials. This app does not accept credential JSON files or QR payloads.',
+                  'Add a credential by scanning its QR or selecting the JSON export from DigiLocker.',
               action: OutlinedButton.icon(
                   onPressed: _importCredential,
                   icon: const Icon(Icons.add),
@@ -910,9 +975,9 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
           const SizedBox(height: 14),
           const _Notice(
               icon: Icons.info_outline,
-              title: 'Issuer checks unavailable',
+              title: 'Signature status is separate',
               text:
-                  'Imported credentials are stored securely, but their signatures and revocation status are not verified by this build.'),
+                  'A wallet match compares credential fields with credentials already stored here. It does not validate issuer signatures or revocation status.'),
         ],
       ]);
 
@@ -1168,7 +1233,8 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
               'proof',
               'type',
               '@context',
-              'credentialSubject'
+              'credentialSubject',
+              '_matchidSourcePayload',
             }.contains(key))
         .map((key) => key.toString())
         .toList();
@@ -1242,7 +1308,7 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
           _EmptyState(
             icon: Icons.description_outlined,
             title: 'No credentials available',
-            text: 'Connect DigiLocker before choosing a claim.',
+            text: 'Add a credential from QR or DigiLocker JSON before choosing a claim.',
             action: OutlinedButton.icon(
               onPressed: () => setState(() => tab = 0),
               icon: const Icon(Icons.add),
@@ -1325,7 +1391,11 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
             label: const Text('Proof generation not configured')),
       ]);
 
-  Widget _verifyPage() => VerifyPage(onActivity: _recordActivity);
+  Widget _verifyPage() => VerifyPage(
+        onActivity: _recordActivity,
+        walletName: walletName,
+        walletCredentials: unlocked ? credentials : const [],
+      );
 }
 
 String _formatActivityTime(String? value) {
@@ -1336,9 +1406,61 @@ String _formatActivityTime(String? value) {
   return '$hour:$minute';
 }
 
+class CredentialQrCaptureScreen extends StatefulWidget {
+  const CredentialQrCaptureScreen({super.key});
+
+  @override
+  State<CredentialQrCaptureScreen> createState() =>
+      _CredentialQrCaptureScreenState();
+}
+
+class _CredentialQrCaptureScreenState extends State<CredentialQrCaptureScreen> {
+  bool _handled = false;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('Scan DigiLocker credential')),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(children: [
+              const Text(
+                  'Place the credential QR inside the frame. Its contents stay on this device.'),
+              const SizedBox(height: 14),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: MobileScanner(
+                    onDetect: (capture) {
+                      if (_handled) return;
+                      final value = capture.barcodes
+                          .map((barcode) => barcode.rawValue)
+                          .whereType<String>()
+                          .firstOrNull;
+                      if (value != null && context.mounted) {
+                        _handled = true;
+                        Navigator.of(context).pop(value);
+                      }
+                    },
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      );
+}
+
 class VerifyPage extends StatefulWidget {
-  const VerifyPage({super.key, required this.onActivity});
+  const VerifyPage({
+    super.key,
+    required this.onActivity,
+    required this.walletName,
+    required this.walletCredentials,
+  });
   final Future<void> Function(String title, String detail) onActivity;
+  final String walletName;
+  final List<Map<String, dynamic>> walletCredentials;
   @override
   State<VerifyPage> createState() => _VerifyPageState();
 }
@@ -1348,29 +1470,73 @@ class _VerifyPageState extends State<VerifyPage> {
   bool scanning = false;
   bool verifying = false;
   CredentialVerificationResult? result;
+  CredentialWalletMatch? walletMatch;
+  String? inputError;
 
-  Future<void> _handleScan(BarcodeCapture capture) async {
+  Future<void> _verifyValue(String raw) async {
     if (verifying) return;
-    final value =
-        capture.barcodes.isEmpty ? null : capture.barcodes.first.rawValue;
-    if (value == null || value.isEmpty) return;
     setState(() {
       scanning = false;
       verifying = true;
       result = null;
+      walletMatch = null;
+      inputError = null;
     });
-    final checked = await verifier.verifyQr(value);
-    if (!mounted) return;
-    setState(() {
-      verifying = false;
-      result = checked;
-    });
-    await widget.onActivity(
-      checked.verified ? 'Credential verified' : 'Credential rejected',
-      checked.verified
-          ? '${checked.credentialType ?? 'Credential'} · issuer signature and expiry valid'
-          : 'Rejected · ${checked.status.name}',
+    try {
+      final presented = PresentedCredential.decode(raw);
+      final match = CredentialWalletMatcher.match(
+        walletName: widget.walletName,
+        presented: presented.credential,
+        walletCredentials: widget.walletCredentials,
+      );
+      CredentialVerificationResult? signature;
+      if (raw.contains('.') && raw.split('.').length == 3) {
+        signature = await verifier.verifyQr(raw);
+      }
+      if (!mounted) return;
+      setState(() {
+        verifying = false;
+        walletMatch = match;
+        result = signature;
+      });
+      await widget.onActivity(
+        match.matches ? 'Credential matched wallet' : 'Credential did not match wallet',
+        '${match.credentialType} · name ${match.nameMatches ? 'matched' : 'not matched'} · masked ID ${match.maskedIdentifierMatches ? 'matched' : 'not matched'}',
+      );
+    } on FormatException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        verifying = false;
+        inputError = e.message;
+      });
+    }
+  }
+
+  Future<void> _handleScan(BarcodeCapture capture) async {
+    final value =
+        capture.barcodes.isEmpty ? null : capture.barcodes.first.rawValue;
+    if (value == null || value.isEmpty) return;
+    await _verifyValue(value);
+  }
+
+  Future<void> _chooseJson() async {
+    final selection = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['json'],
+      allowMultiple: false,
+      withData: true,
     );
+    if (selection == null || selection.files.isEmpty) return;
+    final bytes = selection.files.single.bytes;
+    if (bytes == null || bytes.length > 2 * 1024 * 1024) {
+      setState(() => inputError = 'Choose a JSON file up to 2 MB.');
+      return;
+    }
+    try {
+      await _verifyValue(utf8.decode(bytes));
+    } on FormatException catch (e) {
+      if (mounted) setState(() => inputError = e.message);
+    }
   }
 
   @override
@@ -1378,15 +1544,15 @@ class _VerifyPageState extends State<VerifyPage> {
       ListView(padding: const EdgeInsets.all(22), children: [
         const _PageHeader(
             eyebrow: 'CREDENTIAL VERIFICATION',
-            title: 'Scan to verify',
+            title: 'Match a credential to this wallet',
             subtitle:
-                'Scan an issuer-signed credential QR. The verifier checks its signature and expiry against its trusted issuer registry.'),
+                'Scan the credential QR or choose its DigiLocker JSON export. We compare its holder name and masked ID suffix with credentials saved in this wallet.'),
         const SizedBox(height: 16),
         const _Notice(
           icon: Icons.security_outlined,
-          title: 'Issuer trust is required',
+          title: 'Wallet match is not an issuer proof',
           text:
-              'Configure CREDENTIAL_TRUST_REGISTRY_JSON with issuer public keys before accepting credentials. Unknown issuers and unsupported QR formats are rejected.',
+              'A matching name and masked identifier show that the presented data matches a credential already in this local wallet. This does not prove the QR is issuer-signed or current.',
         ),
         const SizedBox(height: 14),
         FilledButton.icon(
@@ -1395,15 +1561,32 @@ class _VerifyPageState extends State<VerifyPage> {
               : () => setState(() {
                     scanning = true;
                     result = null;
+                    walletMatch = null;
+                    inputError = null;
                   }),
           icon: const Icon(Icons.qr_code_scanner),
           label: const Text('Scan credential QR'),
         ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: verifying ? null : _chooseJson,
+          icon: const Icon(Icons.upload_file_outlined),
+          label: const Text('Choose DigiLocker JSON'),
+        ),
+        if (widget.walletCredentials.isEmpty) ...[
+          const SizedBox(height: 12),
+          const _Notice(
+            icon: Icons.lock_outline,
+            title: 'Unlock and add a credential first',
+            text:
+                'The wallet match needs at least one credential stored in this wallet for comparison.',
+          ),
+        ],
         if (verifying) ...[
           const SizedBox(height: 18),
           const LinearProgressIndicator(),
           const SizedBox(height: 12),
-          const Text('Checking signature, issuer trust, and expiry…'),
+          const Text('Reading credential and comparing wallet fields…'),
         ],
         if (scanning) ...[
           const SizedBox(height: 16),
@@ -1416,28 +1599,44 @@ class _VerifyPageState extends State<VerifyPage> {
               onPressed: () => setState(() => scanning = false),
               child: const Text('Cancel scan')),
         ],
-        if (result != null) ...[
+        if (walletMatch != null) ...[
           const SizedBox(height: 16),
-          if (result!.verified)
-            _Notice(
-              icon: Icons.verified_user_outlined,
-              title: 'Credential signature verified',
-              text:
-                  '${result!.credentialType} · ${result!.issuer}\nExpires ${result!.expiresAt!.toLocal()}\n\n${result!.message}',
-            )
-          else
-            _Notice(
-              icon: Icons.gpp_bad_outlined,
-              title: 'Verification failed',
-              text: result!.message,
-            ),
+          _Notice(
+            icon: walletMatch!.matches
+                ? Icons.verified_user_outlined
+                : Icons.gpp_bad_outlined,
+            title: walletMatch!.matches
+                ? 'Credential matches ${walletMatch!.walletName}'
+                : 'Credential does not match this wallet',
+            text:
+                '${walletMatch!.credentialType}\nHolder name: ${walletMatch!.nameMatches ? 'MATCH' : 'NO MATCH'}\nMasked credential: ${walletMatch!.maskedIdentifierMatches ? walletMatch!.maskedIdentifiers.join(', ') : 'NO MATCH'}',
+          ),
+          const SizedBox(height: 8),
+          _Notice(
+            icon: result?.verified == true
+                ? Icons.verified_outlined
+                : Icons.info_outline,
+            title: result?.verified == true
+                ? 'Issuer signature verified'
+                : 'Issuer signature not verified',
+            text: result?.verified == true
+                ? '${result!.issuer} · expires ${result!.expiresAt!.toLocal()}\n${result!.message}'
+                : 'This build has no trusted issuer result for the presented credential. Wallet field matching alone is not cryptographic verification.',
+          ),
           const SizedBox(height: 8),
           const _Notice(
             icon: Icons.info_outline,
             title: 'Verification scope',
             text:
-                'A valid issuer signature does not prove the QR presenter is the credential subject. Revocation and DigiLocker document status are not checked in this offline flow.',
+              'This check compares values inside the presented payload to values already in the local wallet. It does not verify QR authenticity, prove that the person holding the phone is the holder, or check revocation/DigiLocker status.',
           ),
+        ],
+        if (inputError != null) ...[
+          const SizedBox(height: 12),
+          _Notice(
+              icon: Icons.error_outline,
+              title: 'Could not read credential',
+              text: inputError!),
         ],
         const SizedBox(height: 18),
         if (!scanning && !verifying)
