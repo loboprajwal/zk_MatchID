@@ -31,18 +31,19 @@ void main() {
     expect(await locked.verifySmsCode('+919876543210', '1234'), isTrue);
   });
 
-  test('pose machine requires FRONT then LEFT then RIGHT', () {
+  test('pose machine requires LEFT then RIGHT then FRONT', () {
     final machine = FacePoseStateMachine();
-    expect(machine.observe(faceCount: 1, yaw: 30), FacePose.front);
+    expect(machine.pose, FacePose.left);
     expect(machine.observe(faceCount: 1, yaw: 0), FacePose.left);
     expect(machine.observe(faceCount: 1, yaw: -30), FacePose.left);
     expect(machine.observe(faceCount: 2, yaw: 30), FacePose.left);
     expect(machine.observe(faceCount: 1, yaw: 30), FacePose.right);
-    expect(machine.observe(faceCount: 1, yaw: -30), FacePose.complete);
+    expect(machine.observe(faceCount: 1, yaw: -30), FacePose.front);
+    expect(machine.observe(faceCount: 1, yaw: 0), FacePose.complete);
     machine.reset();
     machine.timeout();
     expect(machine.pose, FacePose.failed);
-    expect(machine.observe(faceCount: 1, yaw: 0), FacePose.failed);
+    expect(machine.observe(faceCount: 1, yaw: 30), FacePose.failed);
   });
 
   test('mnemonic confirmation checks requested words and derived key is stable',

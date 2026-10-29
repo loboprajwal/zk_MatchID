@@ -5,19 +5,20 @@ class FacePoseStateMachine {
   static const frontYawLimit = 10.0;
   static const sideYawThreshold = 25.0;
   static const poseTimeout = Duration(seconds: 10);
-  FacePose pose = FacePose.front;
+  // The prompted capture choreography is LEFT -> RIGHT -> FRONT.
+  FacePose pose = FacePose.left;
 
   FacePose observe({required int faceCount, required double? yaw}) {
     if (faceCount != 1 || yaw == null) return pose;
     switch (pose) {
-      case FacePose.front:
-        if (yaw.abs() < frontYawLimit) pose = FacePose.left;
-        break;
       case FacePose.left:
         if (yaw > sideYawThreshold) pose = FacePose.right;
         break;
       case FacePose.right:
-        if (yaw < -sideYawThreshold) pose = FacePose.complete;
+        if (yaw < -sideYawThreshold) pose = FacePose.front;
+        break;
+      case FacePose.front:
+        if (yaw.abs() < frontYawLimit) pose = FacePose.complete;
         break;
       case FacePose.complete:
       case FacePose.failed:
@@ -27,7 +28,7 @@ class FacePoseStateMachine {
   }
 
   void timeout() => pose = FacePose.failed;
-  void reset() => pose = FacePose.front;
+  void reset() => pose = FacePose.left;
 }
 
 abstract interface class FaceEmbedder {

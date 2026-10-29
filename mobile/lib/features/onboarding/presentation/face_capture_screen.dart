@@ -31,10 +31,12 @@ class MlKitFaceVerificationService implements FaceVerificationService {
   MlKitFaceVerificationService()
       : _detector = FaceDetector(
           options: FaceDetectorOptions(
-            performanceMode: FaceDetectorMode.fast,
+            // Accurate mode is more reliable for yaw estimation than fast mode,
+            // especially on smaller faces and indoor camera feeds.
+            performanceMode: FaceDetectorMode.accurate,
             enableLandmarks: true,
             enableClassification: true,
-            minFaceSize: 0.12,
+            minFaceSize: 0.08,
           ),
         );
 
@@ -82,6 +84,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
   bool _initializing = false;
   bool _processingFrame = false;
   bool _faceCentered = false;
+  bool _lightingLow = false;
   final FacePoseStateMachine _poseMachine = FacePoseStateMachine();
   final FaceEmbedder _embedder = StubFaceEmbedder();
   final RawFaceFrameProcessor _frameProcessor = RawFaceFrameProcessor();
@@ -245,15 +248,20 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
     try {
       final inputImage = _inputImage(image);
       if (inputImage == null) return;
+      final lowLight = _estimateLuma(image) < FaceCaptureTuning.minimumLuma;
       final faces = await _faceService.detectFaces(inputImage);
+      final rotated = _rotationDegrees(_camera!) % 180 != 0;
+      final frameWidth = rotated ? image.height : image.width;
+      final frameHeight = rotated ? image.width : image.height;
       final centered = faces.length == 1 &&
           _isFaceCentered(
             faces.single.boundingBox,
-            image.width,
-            image.height,
+            frameWidth,
+            frameHeight,
           );
       if (!mounted) return;
       setState(() {
+        _lightingLow = lowLight;
         _faceCount = faces.length;
         _faceCentered = centered;
         final previousPose = _poseMachine.pose;
@@ -283,7 +291,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
       if (!mounted) return;
       setState(() {
         _poseMachine.timeout();
-        _error = 'Unable to proceed. Face match couldn’t be detected.';
+        _error = "Unable to proceed. Face match couldn't be detected.";
       });
     });
   }
@@ -298,9 +306,8 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
     final bytes = bytesBuilder.done().buffer.asUint8List();
     final format =
         Platform.isAndroid ? InputImageFormat.nv21 : InputImageFormat.bgra8888;
-    final rotation = InputImageRotationValue.fromRawValue(
-          camera.description.sensorOrientation,
-        ) ??
+    final rotationDegrees = _rotationDegrees(camera);
+    final rotation = InputImageRotationValue.fromRawValue(rotationDegrees) ??
         InputImageRotation.rotation0deg;
     return InputImage.fromBytes(
       bytes: bytes,
@@ -313,24 +320,79 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
     );
   }
 
+  int _rotationDegrees(CameraController camera) {
+    final rotationCompensation = switch (camera.value.deviceOrientation) {
+      DeviceOrientation.portraitUp => 0,
+      DeviceOrientation.landscapeLeft => 90,
+      DeviceOrientation.portraitDown => 180,
+      DeviceOrientation.landscapeRight => 270,
+    };
+    final sensorOrientation = camera.description.sensorOrientation;
+    // Front camera frames rotate in the opposite direction from rear-camera
+    // frames for ML Kit's image-coordinate system.
+    return camera.description.lensDirection == CameraLensDirection.front
+        ? (sensorOrientation + rotationCompensation) % 360
+        : (sensorOrientation - rotationCompensation + 360) % 360;
+  }
+
   bool _isFaceCentered(Rect box, int imageWidth, int imageHeight) {
     final x = box.center.dx / imageWidth;
     final y = box.center.dy / imageHeight;
     final width = box.width / imageWidth;
-    return x >= 0.32 && x <= 0.68 && y >= 0.25 && y <= 0.75 && width >= 0.14;
+    return x >= FaceCaptureTuning.centerMinX &&
+        x <= FaceCaptureTuning.centerMaxX &&
+        y >= FaceCaptureTuning.centerMinY &&
+        y <= FaceCaptureTuning.centerMaxY &&
+        width >= FaceCaptureTuning.minimumFaceWidth;
+  }
+
+  double _estimateLuma(CameraImage image) {
+    if (image.planes.isEmpty) return 255;
+    final bytes = image.planes.first.bytes;
+    if (bytes.isEmpty) return 255;
+    // Sample at most about 1,000 values to keep per-frame work inexpensive.
+    var total = 0;
+    var count = 0;
+    if (Platform.isIOS && image.format.group == ImageFormatGroup.bgra8888) {
+      final pixelStride =
+          ((bytes.length ~/ 4) ~/ 1000).clamp(1, bytes.length ~/ 4);
+      for (var pixel = 0; pixel < bytes.length ~/ 4; pixel += pixelStride) {
+        final offset = pixel * 4;
+        final blue = bytes[offset].toDouble();
+        final green = bytes[offset + 1].toDouble();
+        final red = bytes[offset + 2].toDouble();
+        total += (0.114 * blue + 0.587 * green + 0.299 * red).round();
+        count++;
+      }
+    } else {
+      // Android NV21 stores luminance in the first width*height bytes; the
+      // following chroma bytes must not make a dark frame look well lit.
+      final lumaLength = image.format.group == ImageFormatGroup.nv21
+          ? (image.width * image.height).clamp(1, bytes.length)
+          : bytes.length;
+      final stride = (lumaLength ~/ 1000).clamp(1, lumaLength);
+      for (var i = 0; i < lumaLength; i += stride) {
+        total += bytes[i];
+        count++;
+      }
+    }
+    return total / count;
   }
 
   String get _guidance {
     if (_error != null) return _error!;
+    if (_lightingLow) {
+      return 'Lighting is too low. Face a bright, even light and avoid a bright window behind you.';
+    }
     if (_faceCount == 0) return 'Center your face in the frame';
     if (_faceCount > 1) return 'Only one face can be in the frame';
     if (!_faceCentered) return 'Move your face into the center of the frame';
     return switch (_poseMachine.pose) {
-      FacePose.front => 'Pose 1 of 3 · FRONT',
-      FacePose.left => 'Pose 2 of 3 · LEFT',
-      FacePose.right => 'Pose 3 of 3 · RIGHT',
+      FacePose.front => 'Pose 3 of 3 · FRONT',
+      FacePose.left => 'Pose 1 of 3 · LEFT',
+      FacePose.right => 'Pose 2 of 3 · RIGHT',
       FacePose.complete => 'Face poses captured',
-      FacePose.failed => 'Unable to proceed. Face match couldn’t be detected.',
+      FacePose.failed => "Unable to proceed. Face match couldn't be detected.",
     };
   }
 
@@ -465,7 +527,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
                 const Icon(Icons.face_retouching_off, size: 56),
                 const SizedBox(height: AppSpacing.lg),
                 const Text(
-                    'Unable to proceed. Face match couldn’t be detected.',
+                    "Unable to proceed. Face match couldn't be detected.",
                     textAlign: TextAlign.center),
                 const SizedBox(height: AppSpacing.lg),
                 FilledButton.icon(
@@ -499,6 +561,9 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
               key: const ValueKey('face-guidance'),
             ),
             const SizedBox(height: AppSpacing.lg),
+            if (_capturedImage == null && camera?.value.isInitialized == true)
+              FacePoseCoach(pose: _poseMachine.pose),
+            const SizedBox(height: AppSpacing.md),
             AspectRatio(
               aspectRatio: 0.78,
               child: ClipRRect(
@@ -576,7 +641,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
               ),
             const SizedBox(height: AppSpacing.md),
             const Text(
-              'Follow the FRONT, LEFT, and RIGHT poses in order. FaceEmbedder is a stub in this demo; no identity match is performed. Captured raw frames are deleted after embedding.',
+              'Follow the LEFT, RIGHT, and FRONT poses in order. FaceEmbedder is a stub in this demo; no identity match is performed. Captured raw frames are deleted after embedding.',
               style: AppTypography.bodySmall,
             ),
           ],
@@ -602,4 +667,79 @@ class _FaceGuideOverlay extends StatelessWidget {
           ),
         ),
       );
+}
+
+class FaceCaptureTuning {
+  const FaceCaptureTuning._();
+
+  static const minimumLuma = 48.0;
+  static const centerMinX = 0.22;
+  static const centerMaxX = 0.78;
+  static const centerMinY = 0.16;
+  static const centerMaxY = 0.84;
+  static const minimumFaceWidth = 0.08;
+}
+
+class FacePoseCoach extends StatelessWidget {
+  const FacePoseCoach({required this.pose, super.key});
+
+  final FacePose pose;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, dx, icon) = switch (pose) {
+      FacePose.front => ('Look straight at the camera', 0.0, Icons.face),
+      FacePose.left => ('Slowly turn your face LEFT', -0.42, Icons.turn_left),
+      FacePose.right => ('Slowly turn your face RIGHT', 0.42, Icons.turn_right),
+      FacePose.complete => ('Pose sequence complete', 0.0, Icons.check_circle),
+      FacePose.failed => ('Try the pose sequence again', 0.0, Icons.refresh),
+    };
+
+    return Semantics(
+      liveRegion: true,
+      label: 'Face pose instruction: $label',
+      child: Container(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceMuted,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+        ),
+        child: Column(
+          children: [
+            SizedBox(
+              height: 72,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  const SizedBox(
+                    width: 180,
+                    child: Divider(thickness: 2),
+                  ),
+                  AnimatedAlign(
+                    duration: const Duration(milliseconds: 650),
+                    curve: Curves.easeInOutCubic,
+                    alignment: Alignment(dx, 0),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 250),
+                      child: Icon(icon,
+                          key: ValueKey(pose),
+                          size: 48,
+                          color: AppColors.primary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Text(label, textAlign: TextAlign.center),
+            const SizedBox(height: AppSpacing.xs),
+            const Text(
+              'Keep your phone still. Turn your head, not the camera.',
+              textAlign: TextAlign.center,
+              style: AppTypography.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
