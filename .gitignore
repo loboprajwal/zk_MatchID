@@ -20,6 +20,7 @@ circuits/build/
 !mopro/assets/verification_key.json
 !mopro/assets/DEV_CEREMONY_README.txt
 !mobile/assets/verification_key.json
+!mobile/assets/demo_proof_catalog.json
 
 # Local env (Amoy keys)
 contracts/.env
@@ -52,3 +53,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+mobile/dist/
+mobile/_legacy_parked/
+mobile/test_legacy_disabled/

@@ -49,3 +49,5 @@ app.*.map.json
 .widget_preview/
 =======
 >>>>>>> 017065faef1486607dd045e1cf3c06c4fb72c3e0
+local.properties
+/dist/
