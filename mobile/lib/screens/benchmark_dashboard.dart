@@ -19,9 +19,10 @@ class _BenchmarkDashboardState extends State<BenchmarkDashboard> {
   int _currentIteration = 0;
   final int _totalIterations = 50;
   File? _exportedFile;
+  String? _errorMessage;
 
   // Aggregate stats
-  double _avgWitnessTime = 0.0;
+  double? _avgWitnessTime;
   double _avgProofTime = 0.0;
   double _avgVerifyTime = 0.0;
   int _avgRawBytes = 0;
@@ -34,18 +35,29 @@ class _BenchmarkDashboardState extends State<BenchmarkDashboard> {
       _metrics.clear();
       _currentIteration = 0;
       _exportedFile = null;
+      _errorMessage = null;
     });
 
-    final results = await _runner.runFullBenchmarkSuite(
-      iterations: _totalIterations,
-      onProgress: (current, total, last) {
-        setState(() {
-          _currentIteration = current;
-          _metrics.add(last);
-          _calculateAggregates();
-        });
-      },
-    );
+    List<BenchmarkMetric> results;
+    try {
+      results = await _runner.runFullBenchmarkSuite(
+        iterations: _totalIterations,
+        onProgress: (current, total, last) {
+          setState(() {
+            _currentIteration = current;
+            _metrics.add(last);
+            _calculateAggregates();
+          });
+        },
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isBenchmarking = false;
+        _errorMessage = error.toString();
+      });
+      return;
+    }
 
     setState(() {
       _isBenchmarking = false;
@@ -62,12 +74,13 @@ class _BenchmarkDashboardState extends State<BenchmarkDashboard> {
 
   void _calculateAggregates() {
     if (_metrics.isEmpty) return;
-    _avgWitnessTime =
-        _metrics.map((m) => m.witnessTimeMs).reduce((a, b) => a + b) /
-            _metrics.length;
-    _avgProofTime =
-        _metrics.map((m) => m.proofTimeMs).reduce((a, b) => a + b) /
-            _metrics.length;
+    final witnessSamples =
+        _metrics.map((m) => m.witnessTimeMs).whereType<double>().toList();
+    _avgWitnessTime = witnessSamples.isEmpty
+        ? null
+        : witnessSamples.reduce((a, b) => a + b) / witnessSamples.length;
+    _avgProofTime = _metrics.map((m) => m.proofTimeMs).reduce((a, b) => a + b) /
+        _metrics.length;
     _avgVerifyTime =
         _metrics.map((m) => m.verifyTimeMs).reduce((a, b) => a + b) /
             _metrics.length;
@@ -79,15 +92,15 @@ class _BenchmarkDashboardState extends State<BenchmarkDashboard> {
         (_metrics.map((m) => m.compressedPayloadBytes).reduce((a, b) => a + b) /
                 _metrics.length)
             .round();
-    _avgMemoryMb =
-        _metrics.map((m) => m.peakMemoryMb).reduce((a, b) => a + b) /
-            _metrics.length;
+    _avgMemoryMb = _metrics.map((m) => m.peakMemoryMb).reduce((a, b) => a + b) /
+        _metrics.length;
   }
 
   @override
   Widget build(BuildContext context) {
     final compressionRatio = _avgRawBytes > 0
-        ? ((1.0 - (_avgCompressedBytes / _avgRawBytes)) * 100).toStringAsFixed(1)
+        ? ((1.0 - (_avgCompressedBytes / _avgRawBytes)) * 100)
+            .toStringAsFixed(1)
         : '0.0';
 
     return Scaffold(
@@ -108,24 +121,37 @@ class _BenchmarkDashboardState extends State<BenchmarkDashboard> {
                   children: [
                     const Text(
                       'Automated 50-Cycle Benchmark Engine',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Measures Groth16 witness timing, BN254 proving latency, Base85 compression, and mobile RAM usage for final year research paper.',
+                      'Measures only real native generic proofs. Witness timing is reported unavailable until Mopro exposes it separately.',
                       style: TextStyle(fontSize: 12, color: Colors.grey),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 20),
+                    if (_errorMessage != null) ...[
+                      Text(_errorMessage!, textAlign: TextAlign.center),
+                      const SizedBox(height: 12),
+                    ],
+                    if (!_runner.isAvailable && !_isBenchmarking) ...[
+                      const Text(
+                        'Native Mopro prover unavailable. Simulated benchmark results are disabled.',
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     if (_isBenchmarking) ...[
                       LinearProgressIndicator(
                         value: _currentIteration / _totalIterations,
                       ),
                       const SizedBox(height: 10),
-                      Text('Running Cycle $_currentIteration of $_totalIterations...'),
+                      Text(
+                          'Running Cycle $_currentIteration of $_totalIterations...'),
                     ] else ...[
                       ElevatedButton.icon(
-                        onPressed: _startBenchmark,
+                        onPressed: _runner.isAvailable ? _startBenchmark : null,
                         icon: const Icon(Icons.play_arrow),
                         label: const Text('Run 50-Iteration Benchmark'),
                         style: ElevatedButton.styleFrom(
@@ -159,7 +185,9 @@ class _BenchmarkDashboardState extends State<BenchmarkDashboard> {
                 Expanded(
                   child: _buildMetricCard(
                     title: 'Witness Generation',
-                    value: '${_avgWitnessTime.toStringAsFixed(1)} ms',
+                    value: _avgWitnessTime == null
+                        ? 'Unavailable'
+                        : '${_avgWitnessTime!.toStringAsFixed(1)} ms',
                     icon: Icons.timer,
                     color: Colors.blue,
                   ),
@@ -266,7 +294,8 @@ class _BenchmarkDashboardState extends State<BenchmarkDashboard> {
                     const SizedBox(height: 6),
                     Text(
                       'Saved to: ${_exportedFile!.path}',
-                      style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                      style: const TextStyle(
+                          fontSize: 12, fontFamily: 'monospace'),
                     ),
                   ],
                 ),

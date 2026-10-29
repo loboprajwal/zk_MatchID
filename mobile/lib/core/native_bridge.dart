@@ -4,34 +4,9 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import '../models/proof_payload.dart';
+import 'proof_input_validator.dart';
 
 // C-ABI function signatures
-typedef FfiGenerateAgeProofC = ffi.Pointer<Utf8> Function(
-  ffi.Uint32 birthYear,
-  ffi.Pointer<Utf8> userSecret,
-  ffi.Uint32 currentYear,
-  ffi.Uint32 ageLimit,
-  ffi.Pointer<Utf8> sessionNonce,
-);
-
-typedef FfiGenerateAgeProofDart = ffi.Pointer<Utf8> Function(
-  int birthYear,
-  ffi.Pointer<Utf8> userSecret,
-  int currentYear,
-  int ageLimit,
-  ffi.Pointer<Utf8> sessionNonce,
-);
-
-typedef FfiVerifyAgeProofC = ffi.Int32 Function(
-  ffi.Pointer<Utf8> proofJson,
-  ffi.Pointer<Utf8> verificationKey,
-);
-
-typedef FfiVerifyAgeProofDart = int Function(
-  ffi.Pointer<Utf8> proofJson,
-  ffi.Pointer<Utf8> verificationKey,
-);
-
 typedef FfiFreeStringC = ffi.Void Function(ffi.Pointer<Utf8> ptr);
 typedef FfiFreeStringDart = void Function(ffi.Pointer<Utf8> ptr);
 
@@ -64,16 +39,19 @@ class NativeBridge {
   }
 
   ffi.DynamicLibrary? _dylib;
-  FfiGenerateAgeProofDart? _generateProofFn;
-  FfiVerifyAgeProofDart? _verifyProofFn;
   FfiGeneratePredicateProofDart? _generatePredicateProofFn;
   FfiVerifyPredicateProofDart? _verifyPredicateProofFn;
   FfiFreeStringDart? _freeStringFn;
 
-  bool get isNativeAvailable => _generateProofFn != null;
+  /// The legacy age-only Rust function returns a fixed mock proof. It is
+  /// intentionally disabled even when its symbol is present.
+  bool get isNativeAvailable => false;
 
   /// True when the native multi-predicate (generic_verifier) engine is loaded.
-  bool get isPredicateNativeAvailable => _generatePredicateProofFn != null;
+  bool get isPredicateNativeAvailable =>
+      _generatePredicateProofFn != null &&
+      _verifyPredicateProofFn != null &&
+      _freeStringFn != null;
 
   void _initializeFfi() {
     try {
@@ -90,47 +68,44 @@ class NativeBridge {
       }
 
       if (_dylib != null) {
-        _generateProofFn = _dylib!
-            .lookupFunction<FfiGenerateAgeProofC, FfiGenerateAgeProofDart>(
-                'ffi_generate_age_proof');
-        _verifyProofFn = _dylib!
-            .lookupFunction<FfiVerifyAgeProofC, FfiVerifyAgeProofDart>(
-                'ffi_verify_age_proof');
         _freeStringFn = _dylib!
             .lookupFunction<FfiFreeStringC, FfiFreeStringDart>(
                 'ffi_free_string');
 
-        // Optional: generic multi-predicate engine symbols. When the native
-        // library predates the generic_verifier bindings the age-specific
-        // path above stays usable and predicate proofs fall back to simulation.
+        // Generic proof operations are available only when both proving and
+        // pairing-verification symbols exist. No simulation fallback is used.
         try {
-          _generatePredicateProofFn = _dylib!
-              .lookupFunction<FfiGeneratePredicateProofC,
-                  FfiGeneratePredicateProofDart>('ffi_generate_generic_proof');
-          _verifyPredicateProofFn = _dylib!
-              .lookupFunction<FfiVerifyPredicateProofC,
-                  FfiVerifyPredicateProofDart>('ffi_verify_generic_proof');
+          _generatePredicateProofFn = _dylib!.lookupFunction<
+              FfiGeneratePredicateProofC,
+              FfiGeneratePredicateProofDart>('ffi_generate_generic_proof');
+          _verifyPredicateProofFn = _dylib!.lookupFunction<
+              FfiVerifyPredicateProofC,
+              FfiVerifyPredicateProofDart>('ffi_verify_generic_proof');
         } catch (_) {
           _generatePredicateProofFn = null;
           _verifyPredicateProofFn = null;
         }
       }
     } catch (_) {
-      // Native library not yet loaded; simulation mode active
+      // Native library not yet loaded; proof generation remains unavailable.
       _dylib = null;
     }
   }
 
   /// Helper to get the verification key from input or load from asset bundle
   Future<String> _getOrLoadVkey(String? providedKey) async {
-    if (providedKey != null && providedKey.isNotEmpty && providedKey.trim() != "{}") {
+    if (providedKey != null &&
+        providedKey.isNotEmpty &&
+        providedKey.trim() != "{}") {
       return providedKey;
     }
 
     try {
-      final vkeyString = await rootBundle.loadString('assets/verification_key.json');
+      final vkeyString =
+          await rootBundle.loadString('assets/verification_key.json');
       if (vkeyString.isEmpty || vkeyString.trim() == "{}") {
-        throw Exception("Invalid or empty verification key found at assets/verification_key.json");
+        throw Exception(
+            "Invalid or empty verification key found at assets/verification_key.json");
       }
       return vkeyString;
     } catch (e) {
@@ -147,49 +122,8 @@ class NativeBridge {
     required String sessionNonce,
     String issuerReference = 'did:zkmatch:issuer-authority',
   }) async {
-    if (_generateProofFn != null && _freeStringFn != null) {
-      final secretPtr = userSecret.toNativeUtf8();
-      final noncePtr = sessionNonce.toNativeUtf8();
-
-      try {
-        final resultPtr = _generateProofFn!(
-          birthYear,
-          secretPtr,
-          currentYear,
-          ageLimit,
-          noncePtr,
-        );
-
-        final resultStr = resultPtr.toDartString();
-        _freeStringFn!(resultPtr);
-
-        final parsed = jsonDecode(resultStr) as Map<String, dynamic>;
-        if (parsed.containsKey('error')) {
-          throw Exception('Mopro Engine Error: ${parsed['error']}');
-        }
-
-        return ProofPayload(
-          proof: Groth16Proof.fromJson(parsed['proof'] as Map<String, dynamic>),
-          publicInputs: List<String>.from(parsed['public_inputs'] ?? []),
-          sessionNonce: sessionNonce,
-          issuerReference: issuerReference,
-          timestamp: DateTime.now().millisecondsSinceEpoch,
-        );
-      } finally {
-        calloc.free(secretPtr);
-        calloc.free(noncePtr);
-      }
-    }
-
-    // High-performance cryptographic simulation fallback
-    return _simulateProof(
-      birthYear: birthYear,
-      userSecret: userSecret,
-      currentYear: currentYear,
-      ageLimit: ageLimit,
-      sessionNonce: sessionNonce,
-      issuerReference: issuerReference,
-    );
+    throw UnsupportedError(
+        'The legacy age-only proof path is disabled because it is not backed by the generic circuit.');
   }
 
   /// Generates a Groth16 proof for an arbitrary predicate using the generic
@@ -208,9 +142,19 @@ class NativeBridge {
     required String predicateType,
     required String predicateClaim,
   }) async {
-    final normalizedSet = _normalizeAllowedSet(allowedSet);
+    ProofInputValidator.validate(
+      predicateMode: predicateMode,
+      attributeValue: attributeValue,
+      userSecret: userSecret,
+      credentialExpiry: credentialExpiry,
+      thresholdA: thresholdA,
+      thresholdB: thresholdB,
+      allowedSet: allowedSet,
+      currentTimestamp: currentTimestamp,
+      sessionNonce: sessionNonce,
+    );
 
-    if (_generatePredicateProofFn != null && _freeStringFn != null) {
+    if (isPredicateNativeAvailable) {
       final requestPtr = jsonEncode({
         'predicate_mode': predicateMode,
         'attribute_value': attributeValue,
@@ -218,7 +162,7 @@ class NativeBridge {
         'credential_expiry': credentialExpiry,
         'threshold_a': thresholdA,
         'threshold_b': thresholdB,
-        'allowed_set': normalizedSet,
+        'allowed_set': allowedSet,
         'current_timestamp': currentTimestamp,
         'session_nonce': sessionNonce,
         'issuer_reference': issuerReference,
@@ -234,7 +178,7 @@ class NativeBridge {
           throw Exception('Mopro Engine Error: ${parsed['error']}');
         }
 
-        return ProofPayload(
+        final payload = ProofPayload(
           proof: Groth16Proof.fromJson(parsed['proof'] as Map<String, dynamic>),
           publicInputs: List<String>.from(parsed['public_inputs'] ?? []),
           sessionNonce: sessionNonce,
@@ -243,6 +187,11 @@ class NativeBridge {
           predicateClaim: predicateClaim,
           timestamp: DateTime.now().millisecondsSinceEpoch,
         );
+        if (!await verifyPredicateProof(payload: payload)) {
+          throw StateError(
+              'The generated proof failed local verification. It was not accepted.');
+        }
+        return payload;
       } finally {
         calloc.free(requestPtr);
       }
@@ -283,87 +232,6 @@ class NativeBridge {
   Future<bool> verifyAgeProof({
     required ProofPayload payload,
     String? verificationKey,
-  }) async {
-    final vkey = await _getOrLoadVkey(verificationKey);
-
-    if (_verifyProofFn != null) {
-      final proofJsonPtr = payload.toRawJson().toNativeUtf8();
-      final vkeyPtr = vkey.toNativeUtf8();
-
-      try {
-        final code = _verifyProofFn!(proofJsonPtr, vkeyPtr);
-        return code == 1;
-      } finally {
-        calloc.free(proofJsonPtr);
-        calloc.free(vkeyPtr);
-      }
-    }
-
-    // Structural validation fallback
-    return payload.proof.piA.isNotEmpty &&
-        payload.proof.piB.isNotEmpty &&
-        payload.proof.piC.isNotEmpty &&
-        payload.publicInputs.length >= 3;
-  }
-
-  /// Pads or truncates the allowed set to the circuit's fixed width of 5.
-  List<int> _normalizeAllowedSet(List<int> allowedSet) {
-    final normalized = List<int>.from(allowedSet);
-    while (normalized.length < 5) {
-      normalized.add(0);
-    }
-    if (normalized.length > 5) {
-      normalized.length = 5;
-    }
-    return normalized;
-  }
-
-  ProofPayload _simulateProof({
-    required int birthYear,
-    required String userSecret,
-    required int currentYear,
-    required int ageLimit,
-    required String sessionNonce,
-    String issuerReference = 'did:zkmatch:issuer-authority',
-  }) {
-    final age = currentYear - birthYear;
-    if (age < ageLimit) {
-      throw Exception('Condition not met: Age $age is below$ageLimit');
-    }
-
-    return ProofPayload(
-      proof: Groth16Proof(
-        piA: [
-          '0x18a38b8120e8ef38d8f338d77a06a6c4b22c7eb1923e2069b057c7a52e00b84b',
-          '0x06e300ad8c83a1b4d081f9b3bdfbe6c61f23a9efb4c80210f93ff475b63bc051',
-          '0x01',
-        ],
-        piB: [
-          [
-            '0x20560a80e14856f6723b7efb99e71ab85a815a510d9fef090d81ba21df5232a5',
-            '0x0952136e4f354f15d2a9018cae7d800dd7b8ef3cb7663242ea304f5e884501a3',
-          ],
-          [
-            '0x1f5f4b0051e7eaec886d34e9d7211832070e62608ca342898bbca0f35a092ffc',
-            '0x2bcebcf388914652c4dbd8ebc18b2f9ba7f272a806c9a334cf388c3a10e6f663',
-          ],
-          ['0x01', '0x00'],
-        ],
-        piC: [
-          '0x1c1e95b052ef38b556942ad709bb9a51be8c281df693c0fa011d88c4a4e15cb9',
-          '0x0d3c01bf0003b8e734c3286bf5424563a6e87f8976b92f7a078d10b8cf896c34',
-          '0x01',
-        ],
-      ),
-      publicInputs: [
-        currentYear.toString(),
-        ageLimit.toString(),
-        sessionNonce,
-        '0x7b2f9a12c4e5',
-      ],
-      sessionNonce: sessionNonce,
-      issuerReference: issuerReference,
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-    );
-  }
+  }) async =>
+      false;
 }

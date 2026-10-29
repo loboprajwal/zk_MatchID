@@ -1,7 +1,10 @@
 /// Stores measurement data for one iteration of the Groth16 benchmark.
 class BenchmarkMetric {
   final int iteration;
-  final double witnessTimeMs;
+
+  /// Not separately measurable through the current Mopro API. A null value is
+  /// written as `unavailable`, never reported as simulated timing.
+  final double? witnessTimeMs;
   final double proofTimeMs;
   final double verifyTimeMs;
   final int rawPayloadBytes;
@@ -20,7 +23,7 @@ class BenchmarkMetric {
 
   List<dynamic> toCsvRow() => [
         iteration,
-        witnessTimeMs.toStringAsFixed(2),
+        witnessTimeMs?.toStringAsFixed(2) ?? 'unavailable',
         proofTimeMs.toStringAsFixed(2),
         verifyTimeMs.toStringAsFixed(2),
         rawPayloadBytes,
