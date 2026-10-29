@@ -2,6 +2,17 @@
 
 Demo priority: holder wallets → predicate → consent → QR; verifier scans → big PASS/FAIL.
 
+
+## Restore note (additive)
+
+A follow-up commit restored every file that had been removed relative to
+`feat/onchain-verifier` (DigiLocker onboarding, benchmarks, tests, Android/iOS
+config). The UPI demo remains **additive**: `lib/demo/*`, `lib/screens/upi/*`,
+`lib/main_demo.dart`, plus a **UPI ZK demo** FAB on the existing MatchID home.
+Default `flutter run` still launches `lib/main.dart`. Demo-only:
+`flutter run -t lib/main_demo.dart`.
+
+
 ## What's new (this branch)
 
 | Area | What | Files |

@@ -48,9 +48,9 @@ class ProofPayload {
   final int ttlSeconds;
   final int timestamp;
 
-  /// Honest label for how this proof was produced.
-  /// - `groth16_precomputed`: real snarkjs Groth16 against mopro/assets zkey (catalog).
-  /// - `signed_demo`: HMAC-signed fallback when the catalog is exhausted / native prover unavailable.
+  /// Additive UPI-demo fields (optional; existing callers unchanged).
+  /// - `groth16_precomputed`: real snarkjs Groth16 from demo catalog
+  /// - `signed_demo`: HMAC fallback when catalog exhausted
   final String proofKind;
   final String? catalogEntryId;
   final String? demoSignature;
@@ -62,7 +62,7 @@ class ProofPayload {
     this.issuerReference = 'did:zkmatch:gov-uidai',
     this.predicateType = 'age_18',
     this.predicateClaim = 'Age verified >= 18 with zero DOB disclosed',
-    this.ttlSeconds = 300,
+    this.ttlSeconds = 120,
     required this.timestamp,
     this.proofKind = 'groth16_precomputed',
     this.catalogEntryId,
@@ -85,18 +85,9 @@ class ProofPayload {
 
   factory ProofPayload.fromJson(Map<String, dynamic> json) {
     final proofRaw = json['proof'];
-    Map<String, dynamic> proofMap;
-    if (proofRaw is Map<String, dynamic>) {
-      proofMap = proofRaw;
-    } else if (proofRaw is Map) {
-      proofMap = Map<String, dynamic>.from(proofRaw);
-    } else {
-      proofMap = {
-        'pi_a': <String>[],
-        'pi_b': <List<String>>[],
-        'pi_c': <String>[],
-      };
-    }
+    final Map<String, dynamic> proofMap = proofRaw is Map<String, dynamic>
+        ? proofRaw
+        : Map<String, dynamic>.from(proofRaw as Map);
     return ProofPayload(
       proof: Groth16Proof.fromJson(proofMap),
       publicInputs: List<String>.from(json['public_inputs'] as List? ?? []),
@@ -104,7 +95,7 @@ class ProofPayload {
       issuerReference: json['issuer_reference'] as String? ?? json['issuer_ref'] as String? ?? 'did:zkmatch:gov-uidai',
       predicateType: json['predicate_type'] as String? ?? 'age_18',
       predicateClaim: json['predicate_claim'] as String? ?? 'Age verified >= 18 with zero DOB disclosed',
-      ttlSeconds: json['ttl_seconds'] as int? ?? 300,
+      ttlSeconds: json['ttl_seconds'] as int? ?? 120,
       timestamp: json['timestamp'] as int? ?? 0,
       proofKind: json['proof_kind'] as String? ?? 'groth16_precomputed',
       catalogEntryId: json['catalog_entry_id'] as String?,
