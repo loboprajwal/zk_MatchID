@@ -1,9 +1,9 @@
 {
   "_format": "hh-sol-cache-2",
   "files": {
-    "C:\\FlutterProjects\\zk-MatchID-Kimi\\zk-MatchID-Kimi\\contracts\\contracts\\CredentialSchemaRegistry.sol": {
-      "lastModificationDate": 1793124495031,
-      "contentHash": "28bc1742c6688aab3c572c39aae76b4c",
+    "/workspace/zk_MatchID/contracts/contracts/CredentialSchemaRegistry.sol": {
+      "lastModificationDate": 1793263633293,
+      "contentHash": "13182516e90504fae7f04b29cec513bb",
       "sourceName": "contracts/CredentialSchemaRegistry.sol",
       "solcConfig": {
         "version": "0.8.20",
@@ -37,9 +37,85 @@
         "CredentialSchemaRegistry"
       ]
     },
-    "C:\\FlutterProjects\\zk-MatchID-Kimi\\zk-MatchID-Kimi\\contracts\\contracts\\IssuerRegistry.sol": {
-      "lastModificationDate": 1793124495037,
-      "contentHash": "73c1298d84266b08c42674da2bd9c6ad",
+    "/workspace/zk_MatchID/contracts/contracts/Groth16Verifier.sol": {
+      "lastModificationDate": 1793264005319,
+      "contentHash": "37a13550b67932ec2a00f01e4b2a44fb",
+      "sourceName": "contracts/Groth16Verifier.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        ">=0.7.0 <0.9.0"
+      ],
+      "artifacts": [
+        "Groth16Verifier"
+      ]
+    },
+    "/workspace/zk_MatchID/contracts/contracts/ZkIdentityVerifier.sol": {
+      "lastModificationDate": 1793264052659,
+      "contentHash": "1f2ea5f07e66ed4021ffb0994c0582c0",
+      "sourceName": "contracts/ZkIdentityVerifier.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "./Groth16Verifier.sol",
+        "./IssuerRegistry.sol",
+        "./RevocationRegistry.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "ZkIdentityVerifier"
+      ]
+    },
+    "/workspace/zk_MatchID/contracts/contracts/IssuerRegistry.sol": {
+      "lastModificationDate": 1793263633293,
+      "contentHash": "563197fd5b0347aaabce74d630de7096",
       "sourceName": "contracts/IssuerRegistry.sol",
       "solcConfig": {
         "version": "0.8.20",
@@ -73,9 +149,9 @@
         "IssuerRegistry"
       ]
     },
-    "C:\\FlutterProjects\\zk-MatchID-Kimi\\zk-MatchID-Kimi\\contracts\\contracts\\RevocationRegistry.sol": {
-      "lastModificationDate": 1793124495041,
-      "contentHash": "49966d2bae94d57e6b13fed83d075164",
+    "/workspace/zk_MatchID/contracts/contracts/RevocationRegistry.sol": {
+      "lastModificationDate": 1793263633293,
+      "contentHash": "babb17c2a4b865aea2a4611f6fb6afef",
       "sourceName": "contracts/RevocationRegistry.sol",
       "solcConfig": {
         "version": "0.8.20",

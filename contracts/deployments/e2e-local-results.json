@@ -1,0 +1,16 @@
+{
+  "circuit": "generic_verifier",
+  "constraints": 350,
+  "ceremony": "local-dev pot12 (NOT production)",
+  "age": {
+    "proveMs": 471,
+    "offchainVerifyMs": 14,
+    "onchainGas": 324972
+  },
+  "income": {
+    "proveMs": 79,
+    "offchainVerifyMs": 8,
+    "onchainGas": 324936
+  },
+  "measuredAt": "2026-10-29T08:55:52.695Z"
+}

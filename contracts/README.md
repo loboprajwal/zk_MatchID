@@ -4,24 +4,24 @@ The Blockchain Layer provides decentralized trust and integrity without storing 
 
 ## Smart Contracts
 
-1. **`IssuerRegistry.sol`**:
-   - Manages authorized identity providers (Government, Universities, Banks, Employers).
-   - Stores issuer public keys, metadata, and activation status.
-   - Used by the mobile verifier to validate issuer authenticity.
+1. **`IssuerRegistry.sol`** — authorized identity providers and public keys.
+2. **`CredentialSchemaRegistry.sol`** — schema definitions / hashes.
+3. **`RevocationRegistry.sol`** — credential revocation flags and Merkle roots.
+4. **`Groth16Verifier.sol`** — snarkjs-exported pairing verifier for `generic_verifier` (Groth16 / BN254).
+5. **`ZkIdentityVerifier.sol`** — wrapper that checks issuer status, revocation, nullifier anti-replay, then the Groth16 proof.
 
-2. **`CredentialSchemaRegistry.sol`**:
-   - Registers standard schema definitions and hashes (e.g., `AgeCredentialSchema`).
-   - Ensures consistent attribute definitions across issuers and provers.
-
-3. **`RevocationRegistry.sol`**:
-   - Tracks credential revocation status via cryptographic hashes and Merkle accumulator roots.
-   - Allows issuers to revoke credentials without revealing user identities.
+> The proving key under `mopro/assets/` was produced with a **local-dev Powers of Tau** (see `mopro/assets/DEV_CEREMONY_README.txt`). Replace with an audited ceremony before any production use.
 
 ## Quickstart
 
 ```bash
 cd contracts
 npm install
+cp .env.example .env   # fill PRIVATE_KEY + AMOY_RPC_URL for Amoy deploys
 npx hardhat compile
-npx hardhat test
+npx hardhat test       # includes gas reporter
+npx hardhat run scripts/e2e.js
+npx hardhat run scripts/deploy.js --network amoy
 ```
+
+See `../docs/onchain-verification.md` for measured prove/verify/gas numbers and the full runbook.

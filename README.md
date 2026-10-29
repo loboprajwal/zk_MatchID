@@ -155,8 +155,14 @@ zk-MatchID/
 ```bash
 cd contracts
 npm install
+cp .env.example .env   # for Amoy deploys
 npx hardhat compile
+npx hardhat test
+npx hardhat run scripts/e2e.js
+# npx hardhat run scripts/deploy.js --network amoy
 ```
+See [docs/onchain-verification.md](docs/onchain-verification.md) for gas numbers and the Amoy runbook.
+
 
 ### 2. Issuer Service (`issuer/`)
 ```bash

@@ -26,7 +26,11 @@ circom src/${CIRCUIT_NAME}.circom --r1cs --wasm --sym -o "$BUILD_DIR"
 echo "=== [3/6] Acquiring BN254 Powers of Tau ceremony file ==="
 if [ ! -f "$PTAU_FILE" ]; then
     echo "Downloading Powers of Tau file (degree 12)..."
-    curl -L -o "$PTAU_FILE" "$PTAU_URL"
+    if ! curl -L --fail -o "$PTAU_FILE" "$PTAU_URL"; then
+        echo "WARN: ptau download failed. Falling back to local-dev ceremony via setup_local_dev.sh"
+        rm -f "$PTAU_FILE"
+        exec bash scripts/setup_local_dev.sh "$CIRCUIT_NAME"
+    fi
 else
     echo "Using existing PTAU file: $PTAU_FILE"
 fi

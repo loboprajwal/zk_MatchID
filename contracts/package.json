@@ -6,11 +6,21 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "node": "hardhat node"
+    "node": "hardhat node",
+    "deploy": "hardhat run scripts/deploy.js",
+    "deploy:amoy": "hardhat run scripts/deploy.js --network amoy",
+    "e2e": "hardhat run scripts/e2e.js",
+    "gas": "REPORT_GAS=true hardhat test"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
-    "hardhat": "^2.19.4"
+    "hardhat": "^2.19.4",
+    "hardhat-gas-reporter": "^1.0.10",
+    "dotenv": "^16.4.5",
+    "snarkjs": "^0.7.5"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "snarkjs": "^0.7.5"
+  }
 }

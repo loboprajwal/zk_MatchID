@@ -6,7 +6,8 @@
   "scripts": {
     "compile": "bash scripts/compile_circuit.sh",
     "compile:windows": "powershell -ExecutionPolicy Bypass -File scripts/compile_circuit.ps1",
-    "test": "mocha tests/**/*.test.js --timeout 60000"
+    "test": "mocha tests/**/*.test.js --timeout 60000",
+    "setup:local": "bash scripts/setup_local_dev.sh"
   },
   "dependencies": {
     "circomlib": "^2.0.5",
