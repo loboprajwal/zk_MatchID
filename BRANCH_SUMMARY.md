@@ -80,6 +80,33 @@ node scripts/generate_demo_proof_catalog.js
 - Camera scan needs a real device/emulator with camera permission; single-device button covers projector demos.
 - Legacy DigiLocker/OTP screens remain under `lib/features` / `lib/screens` but are not the demo home.
 
+
+---
+
+## Wallet creation profile (phone · OTP · face) — additive
+
+Added to the **UPI demo** wallet-creation flow (`feat/upi-qr-demo`):
+
+| Step | Behaviour | Files |
+|---|---|---|
+| Demo phone | Country-code picker (default **+91 India**, plus US/UK/UAE/SG/AU/DE), national-number validation, E.164 storage, clearly labelled **DEMO ONLY** | `mobile/lib/demo/country_codes.dart`, wizard phone step |
+| Demo OTP | Always **1234** (hint shown), 4 digit boxes, wrong-code error, resend is a **no-op** with 30s timer | `mobile/lib/demo/demo_otp.dart` |
+| Face capture | Front camera, oval guide, **brackets slide left & right → centre**, then capture. ML Kit confirms one face when available. Local **face template** = SHA-256(image [+ landmark metrics]). Saved under app documents `demo_faces/` only — **never uploaded** | `mobile/lib/screens/upi/demo_face_capture_screen.dart`, `mobile/lib/demo/face_template.dart` |
+| Profile | Per-wallet phone, **OTP verified** badge, face thumbnail, capture date, **Re-capture face**. Linked from each wallet card | `mobile/lib/screens/upi/profile_screen.dart` |
+| Wizard | Name → phone → OTP → face replaces the old name-only dialog | `mobile/lib/screens/upi/wallet_create_wizard.dart`, `wallets_tab.dart` |
+
+`DemoWallet` gained an optional `WalletProfile` (phoneE164, otpVerified, faceImagePath, faceTemplate, faceCapturedAt) persisted in SharedPreferences. Seed wallets ship with demo phones + OTP verified so Profile is useful out of the box.
+
+Camera permission was already present on Android; iOS `NSCameraUsageDescription` was updated to mention local demo face save.
+
+Tests: `mobile/test/demo/phone_otp_validation_test.dart` (phone validation + OTP logic).
+
+Run APK (local only, not committed):
+```bash
+cd mobile && flutter build apk --debug -t lib/main_demo.dart
+# → mobile/dist/zk-matchid-upi-demo-debug.apk
+```
+
 ---
 
 # Branch `feat/onchain-verifier`: What We Built

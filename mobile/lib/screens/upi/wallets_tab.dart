@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../demo/wallet_store.dart';
+import 'profile_screen.dart';
+import 'wallet_create_wizard.dart';
 
 class WalletsTab extends StatefulWidget {
   const WalletsTab({super.key});
@@ -25,30 +27,24 @@ class _WalletsTabState extends State<WalletsTab> {
   }
 
   Future<void> _create() async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Create wallet'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Wallet name',
-            hintText: 'e.g. Travel wallet',
-          ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Create'),
-          ),
-        ],
+    final created = await Navigator.of(context).push<DemoWallet>(
+      MaterialPageRoute(builder: (_) => const WalletCreateWizard()),
+    );
+    if (!mounted) return;
+    if (created != null) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Created ${created.name}')),
+      );
+    }
+  }
+
+  Future<void> _openProfile(DemoWallet wallet) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProfileScreen(walletId: wallet.id),
       ),
     );
-    if (name == null) return;
-    await _store.createWallet(name);
     if (mounted) setState(() {});
   }
 
@@ -81,7 +77,7 @@ class _WalletsTabState extends State<WalletsTab> {
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            'UPI-style: each wallet holds its own credentials. Switch, then Prove.',
+            'UPI-style: each wallet holds its own credentials. New wallets collect demo phone, OTP (1234) and a local face matrix.',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Colors.grey.shade700,
                 ),
@@ -89,6 +85,7 @@ class _WalletsTabState extends State<WalletsTab> {
           const SizedBox(height: 12),
           ..._store.wallets.map((w) {
             final selected = w.id == active?.id;
+            final profile = w.profile;
             return Card(
               elevation: selected ? 3 : 0,
               color: selected ? Colors.indigo.shade50 : null,
@@ -136,6 +133,28 @@ class _WalletsTabState extends State<WalletsTab> {
                             ),
                         ],
                       ),
+                      if (profile.hasPhone) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            const Icon(Icons.phone_iphone, size: 14),
+                            const SizedBox(width: 4),
+                            Text(
+                              profile.phoneE164!,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            const SizedBox(width: 6),
+                            if (profile.otpVerified)
+                              Icon(Icons.verified,
+                                  size: 14, color: Colors.green.shade700),
+                            if (profile.hasFace) ...[
+                              const SizedBox(width: 6),
+                              Icon(Icons.face,
+                                  size: 14, color: Colors.indigo.shade400),
+                            ],
+                          ],
+                        ),
+                      ],
                       const SizedBox(height: 8),
                       ...w.credentials.map(
                         (c) => Padding(
@@ -152,6 +171,14 @@ class _WalletsTabState extends State<WalletsTab> {
                               ),
                             ],
                           ),
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: () => _openProfile(w),
+                          icon: const Icon(Icons.person_outline, size: 18),
+                          label: const Text('Profile'),
                         ),
                       ),
                     ],

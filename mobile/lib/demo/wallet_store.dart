@@ -41,25 +41,73 @@ class WalletCredential {
   }
 }
 
+/// Local profile fields collected during demo wallet creation.
+class WalletProfile {
+  String? phoneE164;
+  bool otpVerified;
+  String? faceImagePath;
+  String? faceTemplate;
+  DateTime? faceCapturedAt;
+
+  WalletProfile({
+    this.phoneE164,
+    this.otpVerified = false,
+    this.faceImagePath,
+    this.faceTemplate,
+    this.faceCapturedAt,
+  });
+
+  bool get hasPhone => phoneE164 != null && phoneE164!.isNotEmpty;
+  bool get hasFace =>
+      faceImagePath != null &&
+      faceImagePath!.isNotEmpty &&
+      faceTemplate != null &&
+      faceTemplate!.isNotEmpty;
+
+  Map<String, dynamic> toJson() => {
+        'phoneE164': phoneE164,
+        'otpVerified': otpVerified,
+        'faceImagePath': faceImagePath,
+        'faceTemplate': faceTemplate,
+        'faceCapturedAt': faceCapturedAt?.toIso8601String(),
+      };
+
+  factory WalletProfile.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return WalletProfile();
+    final captured = json['faceCapturedAt'] as String?;
+    return WalletProfile(
+      phoneE164: json['phoneE164'] as String?,
+      otpVerified: json['otpVerified'] as bool? ?? false,
+      faceImagePath: json['faceImagePath'] as String?,
+      faceTemplate: json['faceTemplate'] as String?,
+      faceCapturedAt:
+          captured == null || captured.isEmpty ? null : DateTime.tryParse(captured),
+    );
+  }
+}
+
 /// A named holder wallet with its own credential set.
 class DemoWallet {
   final String id;
   String name;
   final String userSecret;
   final List<WalletCredential> credentials;
+  WalletProfile profile;
 
   DemoWallet({
     required this.id,
     required this.name,
     required this.userSecret,
     required this.credentials,
-  });
+    WalletProfile? profile,
+  }) : profile = profile ?? WalletProfile();
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
         'userSecret': userSecret,
         'credentials': credentials.map((c) => c.toJson()).toList(),
+        'profile': profile.toJson(),
       };
 
   factory DemoWallet.fromJson(Map<String, dynamic> json) {
@@ -70,6 +118,11 @@ class DemoWallet {
       credentials: (json['credentials'] as List? ?? [])
           .map((e) => WalletCredential.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
+      profile: WalletProfile.fromJson(
+        json['profile'] is Map
+            ? Map<String, dynamic>.from(json['profile'] as Map)
+            : null,
+      ),
     );
   }
 
@@ -157,7 +210,10 @@ class WalletStore {
     await prefs.setString(_activeKey, id);
   }
 
-  Future<DemoWallet> createWallet(String name) async {
+  Future<DemoWallet> createWallet(
+    String name, {
+    WalletProfile? profile,
+  }) async {
     final id = 'wallet_${DateTime.now().millisecondsSinceEpoch}';
     final wallet = DemoWallet(
       id: id,
@@ -170,12 +226,24 @@ class WalletStore {
         degreeLabel: 'B.Tech — Demo University',
         stateLabel: 'Resident of Karnataka (29)',
       ),
+      profile: profile ?? WalletProfile(),
     );
     wallets.add(wallet);
     activeWalletId = id;
     final prefs = await SharedPreferences.getInstance();
     await _persist(prefs);
     return wallet;
+  }
+
+  Future<void> updateProfile(String walletId, WalletProfile profile) async {
+    final w = wallets.cast<DemoWallet?>().firstWhere(
+          (e) => e!.id == walletId,
+          orElse: () => null,
+        );
+    if (w == null) return;
+    w.profile = profile;
+    final prefs = await SharedPreferences.getInstance();
+    await _persist(prefs);
   }
 
   Future<void> renameWallet(String id, String name) async {
@@ -216,6 +284,10 @@ class WalletStore {
           degreeLabel: 'B.Tech CSE — PES University',
           stateLabel: 'Resident of Karnataka (29)',
         ),
+        profile: WalletProfile(
+          phoneE164: '+919876543210',
+          otpVerified: true,
+        ),
       ),
       DemoWallet(
         id: 'wallet_sagar',
@@ -228,6 +300,10 @@ class WalletStore {
           degreeLabel: 'B.E. — VTU Affiliate',
           stateLabel: 'Resident of Delhi (7)',
         ),
+        profile: WalletProfile(
+          phoneE164: '+919811122233',
+          otpVerified: true,
+        ),
       ),
       DemoWallet(
         id: 'wallet_prajwal',
@@ -239,6 +315,10 @@ class WalletStore {
           jurisdictionCode: 29,
           degreeLabel: 'B.Tech — PES University',
           stateLabel: 'Resident of Karnataka (29)',
+        ),
+        profile: WalletProfile(
+          phoneE164: '+918022233344',
+          otpVerified: true,
         ),
       ),
     ];
