@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +8,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:crypto/crypto.dart' as crypto;
+import 'package:cryptography/cryptography.dart';
 
 import 'core/theme/app_theme.dart';
 import 'data/vault_backup_service.dart';
@@ -23,6 +26,7 @@ import 'features/onboarding/presentation/wallet_setup_screen.dart';
 import 'features/onboarding/onboarding_dependencies.dart';
 import 'features/verification/credential_verification_service.dart';
 import 'features/verification/credential_wallet_matcher.dart';
+import 'features/verification/document_provider.dart';
 
 void main() => runApp(const MatchIdApp());
 
@@ -113,8 +117,6 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
   bool backupCompleted = false;
   String walletName = 'My wallet';
   String? verifiedPhone;
-  int? selectedProofCredential;
-  String? selectedProofClaim;
   Timer? vaultLockTimer;
 
   @override
@@ -182,6 +184,10 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
   }
 
   Future<void> _createLocalWallet() async {
+    if (walletCreated && !unlocked) {
+      await _unlock();
+      if (!mounted || !unlocked) return;
+    }
     final guard = OnboardingFlowGuard();
     final phone = await Navigator.of(context).push<String>(
       MaterialPageRoute<String>(
@@ -278,6 +284,44 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _switchWallet() async {
+    if (!unlocked) {
+      _snack('Unlock your wallet before switching wallets.');
+      return;
+    }
+    final wallets = await vault.readWallets();
+    if (wallets.length < 2 || !mounted) return;
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const ListTile(title: Text('Switch wallet')),
+          ...wallets.map((wallet) => ListTile(
+                leading: const Icon(Icons.account_balance_wallet_outlined),
+                title: Text(wallet['name']?.toString() ?? 'Wallet'),
+                subtitle: Text(wallet['nameMasked']?.toString() ?? ''),
+                onTap: () => Navigator.pop(sheetContext, wallet['id'] as String),
+              )),
+        ]),
+      ),
+    );
+    if (selected == null || !mounted) return;
+    await vault.selectWallet(selected);
+    final config = await vault.readWalletConfig();
+    final data = await vault.read();
+    final events = await vault.readActivity();
+    if (!mounted) return;
+    setState(() {
+      walletName = config?['name'] as String? ?? 'My wallet';
+      credentials = data;
+      activity = events;
+      backupSkipped = false;
+      backupCompleted = false;
+      tab = 0;
+    });
+  }
+
   Future<void> _showRestoreInfo() async {
     final method = await showDialog<String>(
       context: context,
@@ -317,6 +361,8 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
         }
         walletName = existingConfig?['name'] as String? ?? 'My wallet';
       } else {
+        final verifiedPhoneNumber = await _verifyIdentityForRestore();
+        if (!mounted || verifiedPhoneNumber == null) return;
         await vault.createWallet('Restored wallet',
             mnemonicDerivedKey: key, deviceLockEnabled: true);
         await vault.setBackupCompleted(true);
@@ -348,6 +394,28 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
         _snack('Could not restore the recovery phrase: ${_errorText(error)}');
       }
     }
+  }
+
+  Future<String?> _verifyIdentityForRestore() async {
+    final phone = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => PhoneOtpScreen(
+          otpService: widget.onboardingDependencies?.otpServiceFactory?.call() ?? MockOtpService(),
+          onVerified: (phoneNumber) async {
+            await vault.saveVerifiedPhone(phoneNumber);
+            if (mounted) setState(() => verifiedPhone = phoneNumber);
+          },
+        ),
+      ),
+    );
+    if (!mounted || phone == null) return null;
+    final face = await Navigator.of(context).push<FaceCaptureResult>(
+      MaterialPageRoute<FaceCaptureResult>(
+        builder: (_) => widget.onboardingDependencies?.faceCaptureScreenBuilder?.call() ?? const FaceCaptureScreen(),
+      ),
+    );
+    if (face?.faceDetected != true || face?.movementChallengePassed != true) return null;
+    return phone;
   }
 
   Future<void> _showBackupPhase() async {
@@ -731,12 +799,20 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
             title: const Text('Choose DigiLocker JSON file'),
             onTap: () => Navigator.pop(sheetContext, 'file'),
           ),
+          ListTile(
+            leading: const Icon(Icons.cloud_download_outlined),
+            title: const Text('Get simulated demo credential'),
+            subtitle: const Text('Fictional data · local demo service only'),
+            onTap: () => Navigator.pop(sheetContext, 'demo'),
+          ),
         ]),
       ),
     );
     if (!mounted || source == null) return;
     try {
       String raw;
+      Map<String, dynamic>? demoEnvelope;
+      Map<String, dynamic>? demoIssuerKey;
       if (source == 'scan') {
         final value = await Navigator.of(context).push<String>(
           MaterialPageRoute<String>(
@@ -745,7 +821,7 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
         );
         if (value == null) return;
         raw = value;
-      } else {
+      } else if (source == 'file') {
         final selection = await FilePicker.platform.pickFiles(
           type: FileType.custom,
           allowedExtensions: const ['json'],
@@ -759,10 +835,45 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
           throw const FormatException('Choose a JSON file up to 2 MB.');
         }
         raw = utf8.decode(bytes);
+      } else {
+        const demoTypes = {
+          'Aadhaar (demo)': 'aadhaar',
+          'Voter ID (demo)': 'voter_id',
+          'Passport (demo)': 'passport',
+          'College (demo)': 'college',
+        };
+        final selected = await showDialog<String>(
+          context: context,
+          builder: (dialogContext) => SimpleDialog(
+            title: const Text('SIMULATED DIGILOCKER: demo data'),
+            children: demoTypes.entries
+                .map((entry) => SimpleDialogOption(
+                      onPressed: () =>
+                          Navigator.pop(dialogContext, entry.value),
+                      child: Text(entry.key),
+                    ))
+                .toList(),
+          ),
+        );
+        if (selected == null) return;
+        final provider = SimulatedDigiLockerHttpProvider.fromDartDefine();
+        try {
+          demoEnvelope = await provider.fetchDocument(
+            type: selected,
+            verifiedPhone: verifiedPhone ?? '',
+          );
+          demoIssuerKey = await provider.fetchIssuerKey();
+        } finally {
+          await provider.close();
+        }
+        raw = jsonEncode(demoEnvelope);
       }
       final presented = PresentedCredential.decode(raw);
       final credential = Map<String, dynamic>.from(presented.credential)
-        ..['_matchidSourcePayload'] = raw;
+        ..['_matchidSourcePayload'] = raw
+        ..['_matchidSignedToken'] = presented.signedToken
+        ..['_matchidIssuerStatus'] = demoEnvelope?['issuerStatus']
+        ..['_matchidDemoIssuerKey'] = demoIssuerKey;
       await vault.add(credential);
       await _recordActivity('Credential added',
           '${_credentialTitle(credential)} · ${presented.source}');
@@ -823,7 +934,6 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
     if (!walletCreated) return _welcomePage();
     final pages = [
       _homePage(),
-      _provePage(),
       _verifyPage(),
       _activityPage(),
       _settingsPage(),
@@ -840,8 +950,6 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
             NavigationDestination(
                 icon: Icon(Icons.account_balance_wallet_outlined),
                 label: 'Wallet'),
-            NavigationDestination(
-                icon: Icon(Icons.verified_user_outlined), label: 'Prove'),
             NavigationDestination(
                 icon: Icon(Icons.qr_code_scanner_outlined), label: 'Verify'),
             NavigationDestination(icon: Icon(Icons.history), label: 'Activity'),
@@ -916,12 +1024,22 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
   Widget _homePage() =>
       ListView(padding: const EdgeInsets.fromLTRB(20, 20, 20, 28), children: [
         Row(children: [
-          const Expanded(
-              child: Text('My credentials',
-                  style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -.4))),
+          Expanded(
+              child: InkWell(
+            onTap: _switchWallet,
+            child: Row(children: [
+              Flexible(
+                child: Text(walletName,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -.4)),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.expand_more, size: 20),
+            ]),
+          )),
           IconButton.filledTonal(
               tooltip: 'Add credential from QR or JSON',
               onPressed: _importCredential,
@@ -1008,11 +1126,17 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
                   value: data['id']?.toString() ?? 'Unavailable'),
               _DetailRow(label: 'Expires', value: expiry ?? 'Not provided'),
               const SizedBox(height: 12),
+              if (data['_matchidIssuerStatus'] == 'SIMULATED')
+                const _Notice(
+                    icon: Icons.science_outlined,
+                    title: 'SIMULATED DIGILOCKER: demo data',
+                    text:
+                        'This fictional sample is not from DigiLocker or UIDAI. Use the Verify screen to check its signature against the configured demo issuer key.'),
               const _Notice(
                   icon: Icons.gpp_maybe_outlined,
-                  title: 'Not verified',
+                  title: 'Issuer status',
                   text:
-                      'The file format was checked, but issuer signature and revocation status were not.'),
+                      'A JSON field match does not establish authenticity. The Verify screen checks an available issuer signature; revocation is only checked when a trusted issuer service is configured.'),
             ]),
       )),
     );
@@ -1023,7 +1147,7 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
         _PageHeader(
             eyebrow: 'ON THIS DEVICE',
             title: 'Activity',
-            subtitle: 'Recent proof and verification events.'),
+            subtitle: 'Recent wallet and verification events.'),
         const SizedBox(height: 18),
         if (activity.isEmpty)
           const _EmptyState(
@@ -1071,6 +1195,15 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
           trailing: const Icon(Icons.chevron_right),
           onTap: _showRestoreInfo,
         )),
+        const SizedBox(height: 8),
+        Card(
+            child: ListTile(
+          leading: const Icon(Icons.add_card_outlined, color: AppColors.primary),
+          title: const Text('Create another wallet'),
+          subtitle: const Text('Keep a separate set of credentials on this device'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _createLocalWallet,
+        )),
         const SizedBox(height: 12),
         Card(
             child: ListTile(
@@ -1104,30 +1237,6 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
         const SizedBox(height: 12),
         Card(
             child: ListTile(
-          leading: const Icon(Icons.speed, color: AppColors.primary),
-          title: const Text('Benchmark'),
-          subtitle: const Text('Proof runtime measurement'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _showUnavailableScreen(
-            'Benchmark',
-            'Benchmark results require the production proof circuit and native prover, which are not present in this build.',
-          ),
-        )),
-        const SizedBox(height: 12),
-        Card(
-            child: ListTile(
-          leading: const Icon(Icons.compare_arrows, color: AppColors.primary),
-          title: const Text('Comparison mode'),
-          subtitle: const Text('Compare proof configurations'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _showUnavailableScreen(
-            'Comparison mode',
-            'There are no configured proof systems to compare. Add audited circuit and prover builds before collecting comparison results.',
-          ),
-        )),
-        const SizedBox(height: 12),
-        Card(
-            child: ListTile(
           leading: const Icon(Icons.delete_outline, color: AppColors.danger),
           title: const Text('Wipe wallet data'),
           subtitle: const Text('Delete every credential stored on this device'),
@@ -1139,23 +1248,8 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
             icon: Icons.shield_outlined,
             title: 'Local storage',
             text:
-                'Credentials are kept in platform-protected storage. This build does not create a recovery phrase or sync wallet data.'),
+                'Credentials are protected by platform storage and wallet-key encryption. Your wallet stays on this device; cloud sync is not connected.'),
       ]);
-
-  Future<void> _showUnavailableScreen(String title, String message) =>
-      showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
-      );
 
   Future<void> _confirmWipe() async {
     final controller = TextEditingController();
@@ -1217,179 +1311,6 @@ class _MatchHomeState extends State<MatchHome> with WidgetsBindingObserver {
     }
     await _confirmWipe();
   }
-
-  List<String> _claimsFor(Map<String, dynamic> credential) {
-    final subject = credential['credentialSubject'];
-    if (subject is Map) {
-      return subject.keys
-          .where((key) => key.toString() != 'id')
-          .map((key) => key.toString())
-          .toList();
-    }
-    return credential.keys
-        .where((key) => !const {
-              'id',
-              'issuer',
-              'proof',
-              'type',
-              '@context',
-              'credentialSubject',
-              '_matchidSourcePayload',
-            }.contains(key))
-        .map((key) => key.toString())
-        .toList();
-  }
-
-  Future<void> _reviewProofConsent() async {
-    final index = selectedProofCredential;
-    if (index == null ||
-        index >= credentials.length ||
-        selectedProofClaim == null) {
-      return;
-    }
-    final credential = credentials[index];
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Review sharing consent'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Credential: ${_credentialTitle(credential)}'),
-            const SizedBox(height: 6),
-            Text('Requested claim: $selectedProofClaim'),
-            const SizedBox(height: 14),
-            const _Notice(
-              icon: Icons.gpp_maybe_outlined,
-              title: 'Cannot share yet',
-              text:
-                  'The credential is unverified and this build has no production proof generator. Nothing will be disclosed.',
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    );
-    if (accepted == true && mounted) {
-      await _showUnavailableScreen(
-        'Proof unavailable',
-        'Consent was reviewed, but no proof was generated or shared. Configure an issuer trust registry, circuit proving key, and audited native Mopro library to continue.',
-      );
-    }
-  }
-
-  Widget _provePage() => ListView(padding: const EdgeInsets.all(22), children: [
-        const _PageHeader(
-            eyebrow: 'SHARE A CLAIM',
-            title: 'Prove a claim',
-            subtitle: 'Choose a credential and the minimum claim to share.'),
-        const SizedBox(height: 18),
-        if (!unlocked)
-          _Notice(
-            icon: Icons.lock_outline,
-            title: 'Unlock your wallet',
-            text: 'Unlock to select one of your stored credentials.',
-            action: FilledButton(
-              onPressed: _unlock,
-              child: const Text('Unlock wallet'),
-            ),
-          )
-        else if (credentials.isEmpty)
-          _EmptyState(
-            icon: Icons.description_outlined,
-            title: 'No credentials available',
-            text: 'Add a credential from QR or DigiLocker JSON before choosing a claim.',
-            action: OutlinedButton.icon(
-              onPressed: () => setState(() => tab = 0),
-              icon: const Icon(Icons.add),
-              label: const Text('Go to wallet'),
-            ),
-          )
-        else ...[
-          const Text('1. Choose a credential',
-              style: AppTypography.sectionTitle),
-          const SizedBox(height: 8),
-          ...credentials.asMap().entries.map((entry) => Card(
-                child: ListTile(
-                  onTap: () => setState(() {
-                    selectedProofCredential = entry.key;
-                    selectedProofClaim = null;
-                  }),
-                  leading: Icon(
-                    selectedProofCredential == entry.key
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
-                    color: AppColors.primary,
-                  ),
-                  title: Text(_credentialTitle(entry.value)),
-                  subtitle: const Text('Unverified credential'),
-                ),
-              )),
-          if (selectedProofCredential != null &&
-              selectedProofCredential! < credentials.length) ...[
-            const SizedBox(height: 14),
-            const Text('2. Choose a claim', style: AppTypography.sectionTitle),
-            const SizedBox(height: 8),
-            ..._claimsFor(credentials[selectedProofCredential!])
-                .map((claim) => ListTile(
-                      onTap: () => setState(() => selectedProofClaim = claim),
-                      leading: Icon(
-                        selectedProofClaim == claim
-                            ? Icons.radio_button_checked
-                            : Icons.radio_button_unchecked,
-                        color: AppColors.primary,
-                      ),
-                      title: Text(claim),
-                    )),
-            if (_claimsFor(credentials[selectedProofCredential!]).isEmpty)
-              const Text('This credential has no selectable claims.'),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed:
-                  selectedProofClaim == null ? null : _reviewProofConsent,
-              icon: const Icon(Icons.visibility_outlined),
-              label: const Text('Review consent'),
-            ),
-          ],
-        ],
-        const SizedBox(height: 18),
-        const _Notice(
-            icon: Icons.lock_outline,
-            title: 'Proof generation is disabled',
-            text:
-                'The app has no production circuit proving key, audited native Mopro library, or trusted policy configuration. It will not create or display a proof payload.'),
-        const SizedBox(height: 18),
-        const _SetupStep(
-            number: '01',
-            title: 'Trusted policy registry',
-            detail:
-                'Install authenticated policy definitions and issuer trust data.'),
-        const _SetupStep(
-            number: '02',
-            title: 'Audited proof artifacts',
-            detail:
-                'Build and audit the circuit-specific key and native proving libraries.'),
-        const _SetupStep(
-            number: '03',
-            title: 'Verification integration',
-            detail:
-                'Validate proof, issuer, expiry, policy binding, and replay state on device.'),
-        const SizedBox(height: 18),
-        FilledButton.icon(
-            onPressed: null,
-            icon: const Icon(Icons.lock_outline),
-            label: const Text('Proof generation not configured')),
-      ]);
 
   Widget _verifyPage() => VerifyPage(
         onActivity: _recordActivity,
@@ -1466,12 +1387,58 @@ class VerifyPage extends StatefulWidget {
 }
 
 class _VerifyPageState extends State<VerifyPage> {
-  final verifier = CredentialVerificationService.fromDartDefine();
   bool scanning = false;
   bool verifying = false;
   CredentialVerificationResult? result;
   CredentialWalletMatch? walletMatch;
   String? inputError;
+
+  CredentialVerificationService _verifierForWallet() {
+    final registry = <String, dynamic>{};
+    final configured = CredentialVerificationService.trustRegistryJson;
+    if (configured.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(configured);
+        if (decoded is Map<String, dynamic>) registry.addAll(decoded);
+      } on FormatException {
+        // An invalid optional registry contributes no trust entries.
+      }
+    }
+    final issuers = <String, Map<String, dynamic>>{};
+    final existing = registry['issuers'];
+    if (existing is List) {
+      for (final issuer in existing.whereType<Map>()) {
+        final id = issuer['id'];
+        if (id is String && id.isNotEmpty) {
+          issuers[id] = Map<String, dynamic>.from(issuer);
+        }
+      }
+    }
+    for (final credential in widget.walletCredentials) {
+      final key = credential['_matchidDemoIssuerKey'];
+      if (key is! Map) continue;
+      final issuerId = key['issuer'];
+      final keyId = key['id'];
+      final algorithm = key['algorithm'];
+      final publicKey = key['publicKey'];
+      if (issuerId is! String ||
+          keyId is! String ||
+          algorithm != 'EdDSA' ||
+          publicKey is! String ||
+          key['demoOnly'] != true) {
+        continue;
+      }
+      final issuer = issuers.putIfAbsent(
+          issuerId, () => {'id': issuerId, 'keys': <Map<String, dynamic>>[]});
+      final keys = issuer['keys'];
+      if (keys is List &&
+          !keys.any((entry) => entry is Map && entry['kid'] == keyId)) {
+        keys.add({'kid': keyId, 'alg': algorithm, 'publicKey': publicKey});
+      }
+    }
+    registry['issuers'] = issuers.values.toList();
+    return CredentialVerificationService(trustRegistry: registry);
+  }
 
   Future<void> _verifyValue(String raw) async {
     if (verifying) return;
@@ -1490,8 +1457,9 @@ class _VerifyPageState extends State<VerifyPage> {
         walletCredentials: widget.walletCredentials,
       );
       CredentialVerificationResult? signature;
-      if (raw.contains('.') && raw.split('.').length == 3) {
-        signature = await verifier.verifyQr(raw);
+      final signedToken = presented.signedToken;
+      if (signedToken != null) {
+        signature = await _verifierForWallet().verifyQr(signedToken);
       }
       if (!mounted) return;
       setState(() {
@@ -1500,7 +1468,9 @@ class _VerifyPageState extends State<VerifyPage> {
         result = signature;
       });
       await widget.onActivity(
-        match.matches ? 'Credential matched wallet' : 'Credential did not match wallet',
+        match.matches
+            ? 'Credential matched wallet'
+            : 'Credential did not match wallet',
         '${match.credentialType} · name ${match.nameMatches ? 'matched' : 'not matched'} · masked ID ${match.maskedIdentifierMatches ? 'matched' : 'not matched'}',
       );
     } on FormatException catch (e) {
@@ -1613,22 +1583,26 @@ class _VerifyPageState extends State<VerifyPage> {
           ),
           const SizedBox(height: 8),
           _Notice(
-            icon: result?.verified == true
-                ? Icons.verified_outlined
-                : Icons.info_outline,
-            title: result?.verified == true
-                ? 'Issuer signature verified'
-                : 'Issuer signature not verified',
-            text: result?.verified == true
-                ? '${result!.issuer} · expires ${result!.expiresAt!.toLocal()}\n${result!.message}'
-                : 'This build has no trusted issuer result for the presented credential. Wallet field matching alone is not cryptographic verification.',
+            icon: result == null
+                ? Icons.info_outline
+                : result!.verified
+                    ? Icons.verified_outlined
+                    : Icons.gpp_bad_outlined,
+            title: result == null
+                ? 'Issuer signature not checked'
+                : result!.verified
+                    ? 'Issuer signature verified'
+                    : 'Issuer signature rejected',
+            text: result == null
+                ? 'No signed token was included or a trusted issuer key is not configured. Field matching alone is not cryptographic verification.'
+                : '${result!.message}${result!.issuer == null ? '' : '\n${result!.issuer}'}${result!.expiresAt == null ? '' : '\nExpires ${result!.expiresAt!.toLocal()}'}',
           ),
           const SizedBox(height: 8),
           const _Notice(
             icon: Icons.info_outline,
             title: 'Verification scope',
             text:
-              'This check compares values inside the presented payload to values already in the local wallet. It does not verify QR authenticity, prove that the person holding the phone is the holder, or check revocation/DigiLocker status.',
+                'This check compares values inside the presented payload to values already in the local wallet. It does not verify QR authenticity, prove that the person holding the phone is the holder, or check revocation/DigiLocker status.',
           ),
         ],
         if (inputError != null) ...[
@@ -1662,6 +1636,135 @@ class VaultStore implements VaultRepository {
   static const _backupSkippedKey = 'backup_skipped_v1';
   static const _backupCompletedKey = 'backup_completed_v1';
   static const _verifiedPhoneKey = 'verified_phone_v1';
+  static const _identityRecordKey = 'identity_record_v1';
+  static const _identityPepperKey = 'identity_phone_pepper_v1';
+  static const _walletRecordsKey = 'wallet_records_v1';
+  static const _activeWalletIdKey = 'active_wallet_id_v1';
+
+  Future<List<Map<String, dynamic>>> _readWalletRecords() async {
+    final raw = await _storage.read(key: _walletRecordsKey);
+    if (raw == null) return [];
+    final value = jsonDecode(raw);
+    if (value is! List || value.any((item) => item is! Map)) {
+      throw const FormatException('The saved wallet index is invalid.');
+    }
+    return value.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> _readIdentityRecords() async {
+    final raw = await _storage.read(key: _identityRecordKey);
+    if (raw == null) return [];
+    final value = jsonDecode(raw);
+    if (value is Map) return [Map<String, dynamic>.from(value)];
+    if (value is! List || value.any((item) => item is! Map)) {
+      throw const FormatException('The saved identity index is invalid.');
+    }
+    return value.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+  }
+
+  Future<String?> _activeWalletId() => _storage.read(key: _activeWalletIdKey);
+
+  Future<String> _newWalletId() async {
+    final bytes = List<int>.generate(16, (_) => Random.secure().nextInt(256));
+    final hex = bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-4${hex.substring(13, 16)}-a${hex.substring(17, 20)}-${hex.substring(20)}';
+  }
+
+  Future<String> _phoneHash(String phone) async {
+    var pepper = await _storage.read(key: _identityPepperKey);
+    if (pepper == null) {
+      pepper = base64UrlEncode(List<int>.generate(32, (_) => Random.secure().nextInt(256)));
+      await _storage.write(key: _identityPepperKey, value: pepper);
+    }
+    return crypto.Hmac(crypto.sha256, base64Url.decode(base64Url.normalize(pepper)))
+        .convert(utf8.encode(phone)).toString();
+  }
+
+  Future<String> _encryptWalletName(String name, String derivedKey) async {
+    final key = base64Url.decode(base64Url.normalize(derivedKey));
+    if (key.length != 32) throw StateError('Wallet key material is invalid.');
+    final algorithm = AesGcm.with256bits();
+    final nonce = algorithm.newNonce();
+    final box = await algorithm.encrypt(utf8.encode(name), secretKey: SecretKey(key), nonce: nonce);
+    return base64UrlEncode([...nonce, ...box.cipherText, ...box.mac.bytes]);
+  }
+
+  Future<String> _decryptWalletName(String encrypted, String derivedKey) async {
+    final bytes = base64Url.decode(base64Url.normalize(encrypted));
+    if (bytes.length < 29) throw const FormatException('Encrypted wallet name is invalid.');
+    final algorithm = AesGcm.with256bits();
+    final box = SecretBox(bytes.sublist(12, bytes.length - 16), nonce: bytes.sublist(0, 12), mac: Mac(bytes.sublist(bytes.length - 16)));
+    final clear = await algorithm.decrypt(box, secretKey: SecretKey(base64Url.decode(base64Url.normalize(derivedKey))));
+    return utf8.decode(clear);
+  }
+
+  Future<String> _encryptVaultContents(String plainJson, String derivedKey) async =>
+      jsonEncode({
+        'format': 'matchid-encrypted-vault-v1',
+        'blob': await _encryptWalletName(plainJson, derivedKey),
+      });
+
+  Future<String> _decryptVaultContents(String stored, String derivedKey) async {
+    final decoded = jsonDecode(stored);
+    if (decoded is Map && decoded['format'] == 'matchid-encrypted-vault-v1') {
+      final blob = decoded['blob'];
+      if (blob is! String) throw const FormatException('Encrypted wallet data is invalid.');
+      return _decryptWalletName(blob, derivedKey);
+    }
+    return stored; // Legacy secure-storage vault; migration re-encrypts it.
+  }
+
+  String _maskWalletName(String name) {
+    final visible = String.fromCharCodes(name.trim().runes.take(2));
+    return '$visible•••••';
+  }
+
+  Future<String> _credentialKeyForActiveWallet() async {
+    final id = await _activeWalletId();
+    return id == null ? _key : 'credential_vault_$id';
+  }
+
+  Future<String> _configKeyForActiveWallet() async {
+    final id = await _activeWalletId();
+    return id == null ? _walletConfigKey : 'wallet_config_$id';
+  }
+
+  String _localCredentialFingerprint(Map<String, dynamic> value) {
+    final issuer = value['issuer'];
+    final issuerId = issuer is Map ? issuer['id'] : issuer;
+    final id = value['id'];
+    final stableId = id is String && id.isNotEmpty
+        ? '$issuerId\u0000$id'
+        : jsonEncode(value);
+    return crypto.sha256.convert(utf8.encode(stableId)).toString();
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> readWallets() async {
+    final records = await _readWalletRecords();
+    final result = <Map<String, dynamic>>[];
+    for (final record in records) {
+      final id = record['id'];
+      if (id is! String) continue;
+      final configRaw = await _storage.read(key: 'wallet_config_$id');
+      final config = configRaw == null ? <String, dynamic>{} : jsonDecode(configRaw) as Map<String, dynamic>;
+      final derivedKey = config['mnemonicDerivedKey'];
+      final encrypted = record['nameEncrypted'];
+      String? name;
+      if (derivedKey is String && encrypted is String) name = await _decryptWalletName(encrypted, derivedKey);
+      result.add({...record, if (name != null) 'name': name});
+    }
+    return result;
+  }
+
+  @override
+  Future<void> selectWallet(String walletId) async {
+    final records = await _readWalletRecords();
+    if (!records.any((record) => record['id'] == walletId)) {
+      throw const FormatException('That wallet is not available on this device.');
+    }
+    await _storage.write(key: _activeWalletIdKey, value: walletId);
+  }
 
   @override
   Future<String?> readVerifiedPhone() => _storage.read(key: _verifiedPhoneKey);
@@ -1743,9 +1846,34 @@ class VaultStore implements VaultRepository {
       throw const FormatException(
           'The backup vault exceeds the supported size.');
     }
-    await _storage.write(key: _key, value: encodedCredentials);
+    final activeId = await _activeWalletId();
+    final credentialsKey = activeId == null ? _key : 'credential_vault_$activeId';
+    final configKey = activeId == null ? _walletConfigKey : 'wallet_config_$activeId';
     await _storage.write(
-        key: _walletConfigKey, value: jsonEncode(normalizedConfig));
+        key: configKey, value: jsonEncode(normalizedConfig));
+    if (activeId != null) {
+      final name = normalizedConfig['name'];
+      final derivedKey = normalizedConfig['mnemonicDerivedKey'];
+      if (name is String && derivedKey is String) {
+        final records = await _readWalletRecords();
+        final index = records.indexWhere((record) => record['id'] == activeId);
+        if (index >= 0) {
+          records[index] = {
+            ...records[index],
+            'nameMasked': _maskWalletName(name),
+            'nameEncrypted': await _encryptWalletName(name, derivedKey),
+          };
+          await _storage.write(key: _walletRecordsKey, value: jsonEncode(records));
+        }
+      }
+    }
+    final derivedKey = normalizedConfig['mnemonicDerivedKey'];
+    if (derivedKey is! String) {
+      throw const FormatException('Backup wallet recovery key is missing.');
+    }
+    await _storage.write(
+        key: credentialsKey,
+        value: await _encryptVaultContents(encodedCredentials, derivedKey));
     await _storage.write(
         key: _activityKey, value: jsonEncode(normalizedEvents));
     if (phone is String) {
@@ -1784,44 +1912,138 @@ class VaultStore implements VaultRepository {
 
   @override
   Future<Map<String, dynamic>?> readWalletConfig() async {
-    final raw = await _storage.read(key: _walletConfigKey);
+    final raw = await _storage.read(key: await _configKeyForActiveWallet());
     if (raw == null) return null;
     final decoded = jsonDecode(raw);
     if (decoded is! Map) {
       throw const FormatException('The saved wallet profile is invalid.');
     }
-    return Map<String, dynamic>.from(decoded);
+    final config = Map<String, dynamic>.from(decoded);
+    final activeId = await _activeWalletId();
+    if (activeId != null) {
+      final records = await _readWalletRecords();
+      final record = records.where((item) => item['id'] == activeId).firstOrNull;
+      final encrypted = record?['nameEncrypted'];
+      final derivedKey = config['mnemonicDerivedKey'];
+      if (encrypted is String && derivedKey is String) {
+        config['name'] = await _decryptWalletName(encrypted, derivedKey);
+      }
+    }
+    return config;
   }
 
   @override
   Future<void> createWallet(String name,
-          {String? mnemonicDerivedKey, bool deviceLockEnabled = true}) =>
-      _storage.write(
-        key: _walletConfigKey,
-        value: jsonEncode({
-          'name': name,
-          if (mnemonicDerivedKey != null)
-            'mnemonicDerivedKey': mnemonicDerivedKey,
-          'deviceLockEnabled': deviceLockEnabled,
-          'createdAt': DateTime.now().toUtc().toIso8601String(),
-        }),
-      );
+      {String? mnemonicDerivedKey, bool deviceLockEnabled = true}) async {
+    if (mnemonicDerivedKey == null) {
+      throw StateError('A recovery phrase is required to protect the wallet name.');
+    }
+    final phone = await readVerifiedPhone();
+    if (phone == null) throw StateError('Verify a phone number before creating a wallet.');
+    final phoneHash = await _phoneHash(phone);
+    final identities = await _readIdentityRecords();
+    var identity = identities.where((item) => item['phoneHash'] == phoneHash).firstOrNull;
+    if (identity == null) {
+      identity = {
+        'id': await _newWalletId(),
+        'phoneHash': phoneHash,
+        'faceEmbedding': null,
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
+      };
+      identities.add(identity);
+      await _storage.write(key: _identityRecordKey, value: jsonEncode(identities));
+    }
+
+    var records = await _readWalletRecords();
+    if (records.isEmpty) {
+      final legacyConfigRaw = await _storage.read(key: _walletConfigKey);
+      final legacyCredentialsRaw = await _storage.read(key: _key);
+      if (legacyConfigRaw != null || legacyCredentialsRaw != null) {
+        final legacyConfig = legacyConfigRaw == null
+            ? <String, dynamic>{}
+            : Map<String, dynamic>.from(jsonDecode(legacyConfigRaw) as Map);
+        final legacyId = await _newWalletId();
+        final legacyKey = (legacyConfig['mnemonicDerivedKey'] as String?) ?? mnemonicDerivedKey;
+        final oldName = (legacyConfig['name'] as String?) ?? 'Recovered wallet';
+        final encryptedName = await _encryptWalletName(oldName, legacyKey);
+        final now = DateTime.now().toUtc().toIso8601String();
+        records.add({
+          'id': legacyId,
+          'identityId': identity['id'],
+          'nameMasked': _maskWalletName(oldName),
+          'nameEncrypted': encryptedName,
+          'vaultRef': 'local-wallet:$legacyId',
+          'createdAt': (legacyConfig['createdAt'] as String?) ?? now,
+        });
+        await _storage.write(key: 'wallet_config_$legacyId', value: jsonEncode({
+          'mnemonicDerivedKey': legacyKey,
+          'deviceLockEnabled': legacyConfig['deviceLockEnabled'] ?? true,
+          'createdAt': (legacyConfig['createdAt'] as String?) ?? now,
+        }));
+        if (legacyCredentialsRaw != null) {
+          await _storage.write(
+              key: 'credential_vault_$legacyId',
+              value: await _encryptVaultContents(legacyCredentialsRaw, legacyKey));
+        }
+        await _storage.write(key: _walletRecordsKey, value: jsonEncode(records));
+        // Remove the legacy copies only after the re-encrypted wallet and its
+        // index are durable; the migrated data remains available as Wallet #1.
+        await _storage.delete(key: _key);
+        await _storage.delete(key: _walletConfigKey);
+      }
+    }
+
+    final walletId = await _newWalletId();
+    final createdAt = DateTime.now().toUtc().toIso8601String();
+    final encryptedName = await _encryptWalletName(name, mnemonicDerivedKey);
+    records.add({
+      'id': walletId,
+      'identityId': identity['id'],
+      'nameMasked': _maskWalletName(name),
+      'nameEncrypted': encryptedName,
+      'vaultRef': 'local-wallet:$walletId',
+      'createdAt': createdAt,
+    });
+    await _storage.write(key: 'wallet_config_$walletId', value: jsonEncode({
+      'mnemonicDerivedKey': mnemonicDerivedKey,
+      'deviceLockEnabled': deviceLockEnabled,
+      'createdAt': createdAt,
+    }));
+    await _storage.write(key: _walletRecordsKey, value: jsonEncode(records));
+    await _storage.write(key: _activeWalletIdKey, value: walletId);
+  }
 
   @override
   Future<void> wipe() async {
+    for (final record in await _readWalletRecords()) {
+      final id = record['id'];
+      if (id is String) {
+        await _storage.delete(key: 'credential_vault_$id');
+        await _storage.delete(key: 'wallet_config_$id');
+      }
+    }
     await _storage.delete(key: _key);
     await _storage.delete(key: _walletConfigKey);
     await _storage.delete(key: _activityKey);
     await _storage.delete(key: _backupSkippedKey);
     await _storage.delete(key: _backupCompletedKey);
     await _storage.delete(key: _verifiedPhoneKey);
+    await _storage.delete(key: _identityRecordKey);
+    await _storage.delete(key: _identityPepperKey);
+    await _storage.delete(key: _walletRecordsKey);
+    await _storage.delete(key: _activeWalletIdKey);
   }
 
   @override
   Future<List<Map<String, dynamic>>> read() async {
-    final raw = await _storage.read(key: _key);
+    final raw = await _storage.read(key: await _credentialKeyForActiveWallet());
     if (raw == null) return [];
-    final value = jsonDecode(raw);
+    final configRaw = await _storage.read(key: await _configKeyForActiveWallet());
+    if (configRaw == null) throw const FormatException('Wallet key configuration is missing.');
+    final config = jsonDecode(configRaw);
+    final derivedKey = config is Map ? config['mnemonicDerivedKey'] : null;
+    if (derivedKey is! String) throw const FormatException('Wallet recovery key is missing.');
+    final value = jsonDecode(await _decryptVaultContents(raw, derivedKey));
     if (value is! List || value.any((item) => item is! Map)) {
       throw const FormatException(
           'The encrypted credential vault has invalid data.');
@@ -1836,7 +2058,14 @@ class VaultStore implements VaultRepository {
         maxVaultJsonBytes) {
       throw StateError('The vault has reached its 200 MB storage limit.');
     }
-    await _storage.write(key: _key, value: encoded);
+    final configRaw = await _storage.read(key: await _configKeyForActiveWallet());
+    if (configRaw == null) throw StateError('Create or restore a wallet before storing credentials.');
+    final config = jsonDecode(configRaw);
+    final derivedKey = config is Map ? config['mnemonicDerivedKey'] : null;
+    if (derivedKey is! String) throw StateError('The wallet recovery key is unavailable.');
+    await _storage.write(
+        key: await _credentialKeyForActiveWallet(),
+        value: await _encryptVaultContents(encoded, derivedKey));
   }
 
   @override
@@ -1853,6 +2082,24 @@ class VaultStore implements VaultRepository {
             existing['id'] == valueId &&
             existing['issuer'].toString() == valueIssuer.toString())) {
       throw StateError('This credential is already stored.');
+    }
+    final fingerprint = _localCredentialFingerprint(value);
+    final activeId = await _activeWalletId();
+    for (final record in await _readWalletRecords()) {
+      final walletId = record['id'];
+      if (walletId is! String || walletId == activeId) continue;
+      final raw = await _storage.read(key: 'credential_vault_$walletId');
+      if (raw == null) continue;
+      final configRaw = await _storage.read(key: 'wallet_config_$walletId');
+      if (configRaw == null) continue;
+      final config = jsonDecode(configRaw);
+      final key = config is Map ? config['mnemonicDerivedKey'] : null;
+      if (key is! String) continue;
+      final decoded = jsonDecode(await _decryptVaultContents(raw, key));
+      if (decoded is List && decoded.whereType<Map>().any((credential) =>
+          _localCredentialFingerprint(Map<String, dynamic>.from(credential)) == fingerprint)) {
+        throw StateError('This credential already belongs to another wallet on this device.');
+      }
     }
     all.add(value);
     await write(all);
@@ -1957,6 +2204,8 @@ class _CredentialCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final issuer = data['issuer'];
     final issuerName = issuer is Map ? issuer['name'] ?? issuer['id'] : issuer;
+    final simulated = data['_matchidIssuerStatus'] == 'SIMULATED' ||
+        issuerName.toString().toUpperCase().contains('SIMULATED DIGILOCKER');
     return Card(
       margin: const EdgeInsets.only(bottom: 9),
       child: ListTile(
@@ -1977,6 +2226,14 @@ class _CredentialCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppTypography.bodySmall),
+              if (simulated) ...[
+                const SizedBox(height: 4),
+                const Text('SIMULATED DIGILOCKER: demo data',
+                    style: TextStyle(
+                        color: AppColors.pendingText,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700)),
+              ],
               const SizedBox(height: 4),
               const _StatusBadge(
                   label: 'UNVERIFIED',
@@ -2033,37 +2290,3 @@ class _StatusBadge extends StatelessWidget {
       );
 }
 
-class _SetupStep extends StatelessWidget {
-  const _SetupStep(
-      {required this.number, required this.title, required this.detail});
-  final String number, title, detail;
-  @override
-  Widget build(BuildContext context) => Container(
-      margin: const EdgeInsets.only(bottom: 9),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-          color: Colors.white, borderRadius: BorderRadius.circular(16)),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Container(
-          width: 34,
-          height: 34,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-              color: const Color(0xffe7f2ef),
-              borderRadius: BorderRadius.circular(11)),
-          child: Text(number,
-              style: const TextStyle(
-                  color: teal, fontWeight: FontWeight.bold, fontSize: 12)),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          Text(detail,
-              style: const TextStyle(
-                  color: Colors.black54, height: 1.4, fontSize: 13))
-        ]))
-      ]));
-}

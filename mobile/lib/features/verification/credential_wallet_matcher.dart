@@ -4,10 +4,15 @@ import 'dart:convert';
 /// Signed JWS values are decoded for display/matching only; callers must use an
 /// issuer trust registry before treating the issuer signature as authentic.
 class PresentedCredential {
-  const PresentedCredential({required this.credential, required this.source});
+  const PresentedCredential({
+    required this.credential,
+    required this.source,
+    this.signedToken,
+  });
 
   final Map<String, dynamic> credential;
   final String source;
+  final String? signedToken;
 
   static PresentedCredential decode(String raw) {
     if (utf8.encode(raw).length > 2 * 1024 * 1024) {
@@ -27,16 +32,16 @@ class PresentedCredential {
         } else {
           throw const FormatException('Signed QR has no credential object.');
         }
-        return PresentedCredential(credential: root, source: 'signed QR');
+        return PresentedCredential(
+            credential: root, source: 'signed QR', signedToken: value);
       } on FormatException {
         // It may be ordinary text with periods, so continue as JSON parsing.
       }
     }
 
     final decoded = jsonDecode(value);
-    final rootValue = decoded is List && decoded.length == 1
-        ? decoded.single
-        : decoded;
+    final rootValue =
+        decoded is List && decoded.length == 1 ? decoded.single : decoded;
     if (rootValue is! Map) {
       throw const FormatException('The file or QR must contain a JSON object.');
     }
@@ -48,7 +53,10 @@ class PresentedCredential {
     }
     return PresentedCredential(
       credential: credential,
-      source: root.containsKey('credentialSubject') ? 'credential JSON' : 'DigiLocker JSON',
+      source: root.containsKey('credentialSubject')
+          ? 'credential JSON'
+          : 'DigiLocker JSON',
+      signedToken: root['token'] is String ? root['token'] as String : null,
     );
   }
 
@@ -77,13 +85,14 @@ class PresentedCredential {
     ]) {
       final nested = value[key];
       if (nested is Map) {
-        final found = _findCredential(Map<String, dynamic>.from(nested), depth + 1);
+        final found =
+            _findCredential(Map<String, dynamic>.from(nested), depth + 1);
         if (found != null) return found;
       } else if (nested is List) {
         for (final item in nested) {
           if (item is Map) {
-            final found = _findCredential(
-                Map<String, dynamic>.from(item), depth + 1);
+            final found =
+                _findCredential(Map<String, dynamic>.from(item), depth + 1);
             if (found != null) return found;
           }
         }
@@ -202,7 +211,11 @@ class CredentialWalletMatcher {
       final value = subject[key];
       if (value is String && value.trim().isNotEmpty) return value.trim();
     }
-    final parts = [subject['firstName'], subject['middleName'], subject['lastName']]
+    final parts = [
+      subject['firstName'],
+      subject['middleName'],
+      subject['lastName']
+    ]
         .whereType<String>()
         .map((part) => part.trim())
         .where((part) => part.isNotEmpty);
@@ -232,7 +245,8 @@ class CredentialWalletMatcher {
       if (value == null || value is Map || value is List) continue;
       final digits = value.toString().replaceAll(RegExp(r'[^0-9]'), '');
       if (digits.length >= 4) {
-        result.putIfAbsent(category, () => <String>{})
+        result
+            .putIfAbsent(category, () => <String>{})
             .add(digits.substring(digits.length - 4));
       }
     }
@@ -244,12 +258,17 @@ class CredentialWalletMatcher {
 
   static bool _isPersonName(String value) =>
       value.trim().isNotEmpty &&
-      !const {'my wallet', 'personal wallet', 'wallet'}.contains(_normalizeName(value));
+      !const {'my wallet', 'personal wallet', 'wallet'}
+          .contains(_normalizeName(value));
 
   static String _credentialType(Map<String, dynamic> credential) {
-    final value = credential['type'] ?? credential['documentType'] ?? credential['docType'];
+    final value = credential['type'] ??
+        credential['documentType'] ??
+        credential['docType'];
     if (value is List) {
-      final types = value.whereType<String>().where((item) => item != 'VerifiableCredential');
+      final types = value
+          .whereType<String>()
+          .where((item) => item != 'VerifiableCredential');
       return types.isEmpty ? 'Identity credential' : types.first;
     }
     return value is String && value.isNotEmpty ? value : 'Identity credential';

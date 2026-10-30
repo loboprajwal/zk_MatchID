@@ -35,7 +35,19 @@ void main() {
     expect(decoded.source, 'DigiLocker JSON');
   });
 
-  test('matches holder name and masked ID suffix against wallet credential', () {
+  test('keeps the compact issuer token from a demo JSON envelope', () {
+    final decoded = PresentedCredential.decode(jsonEncode({
+      'format': 'zkmatchid-digilocker-demo+jws;v=1',
+      'credential': localCredential,
+      'token': 'header.payload.signature',
+      'issuerStatus': 'SIMULATED',
+    }));
+    expect(decoded.credential['credentialSubject'], isA<Map>());
+    expect(decoded.signedToken, 'header.payload.signature');
+  });
+
+  test('matches holder name and masked ID suffix against wallet credential',
+      () {
     final match = CredentialWalletMatcher.match(
       walletName: 'My wallet',
       presented: const {

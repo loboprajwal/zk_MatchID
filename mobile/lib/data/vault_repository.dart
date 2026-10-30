@@ -5,6 +5,10 @@ abstract interface class VaultRepository {
 
   Future<Map<String, dynamic>?> readWalletConfig();
 
+  Future<List<Map<String, dynamic>>> readWallets();
+
+  Future<void> selectWallet(String walletId);
+
   Future<String?> readVerifiedPhone();
 
   Future<void> saveVerifiedPhone(String phoneNumber);

@@ -1,0 +1,48 @@
+project_id = "zk-matchid"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000", "http://127.0.0.1:3000"]
+jwt_expiry = 3600
+enable_signup = true
+enable_anonymous_sign_ins = false
+enable_manual_linking = false
+
+[auth.email]
+enable_signup = true
+smtp_admin_email = "demo@example.test"
+smtp_host = "localhost"
+smtp_port = 1025
+smtp_user = ""
+smtp_pass = ""
+
+[functions.otp-send]
+verify_jwt = true
+
+[functions.otp-verify]
+verify_jwt = true
+
+[functions.issue-attestation]
+verify_jwt = true
+
+[functions.verify-attestation]
+verify_jwt = true
+
+[functions.admin-metrics]
+verify_jwt = true

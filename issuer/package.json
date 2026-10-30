@@ -1,10 +1,13 @@
 {
   "name": "zk-matchid-issuer",
   "version": "1.0.0",
-  "description": "Mock Trusted Issuer Service for zk-MatchID Verifiable Credentials",
-  "main": "src/issuer_service.js",
+  "private": true,
+  "description": "Demo-only simulated DigiLocker and fictional credential issuer",
+  "main": "src/server.js",
   "scripts": {
-    "issue": "node src/issuer_service.js"
+    "start": "node src/server.js",
+    "test": "node --test src/*.test.js",
+    "issue": "node src/server.js"
   },
   "license": "MIT"
 }

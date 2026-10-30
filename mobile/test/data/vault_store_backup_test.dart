@@ -17,9 +17,16 @@ void main() {
       'credentialSubject': {'ageOver18': true},
     };
 
-    await store.createWallet('Primary wallet');
     await store.saveVerifiedPhone('+919876543210');
+    final phrase = MnemonicBackup.generate();
+    await store.createWallet('Primary wallet',
+        mnemonicDerivedKey: base64UrlEncode(MnemonicBackup.deriveWalletKey(phrase)));
     await store.add(credential);
+    final activeWallet = (await store.readWallets()).single;
+    final encryptedVault = await deviceStorage.read(
+        key: 'credential_vault_${activeWallet['id']}');
+    expect(encryptedVault, contains('matchid-encrypted-vault-v1'));
+    expect(encryptedVault, isNot(contains('cred-1')));
     await store.addActivity('Credential imported', 'Stored securely');
     final originalActivity = await store.readActivity();
     final archive = await VaultBackupService().encrypt(
@@ -50,6 +57,7 @@ void main() {
     final phrase = MnemonicBackup.generate();
     final key = base64UrlEncode(MnemonicBackup.deriveWalletKey(phrase));
     final source = VaultStore(storage: _MemorySecureKeyValueStore());
+    await source.saveVerifiedPhone('+919876543210');
     await source.createWallet('Fixture wallet',
         mnemonicDerivedKey: key, deviceLockEnabled: false);
     final archive = await VaultBackupService().encrypt(
@@ -58,6 +66,7 @@ void main() {
         .decrypt(archive, 'correct horse battery staple');
 
     final phraseRestore = VaultStore(storage: _MemorySecureKeyValueStore());
+    await phraseRestore.saveVerifiedPhone('+919876543210');
     await phraseRestore.createWallet('Fixture wallet',
         mnemonicDerivedKey: base64UrlEncode(
             MnemonicBackup.deriveWalletKey(MnemonicBackup.normalize(phrase))),
@@ -72,6 +81,56 @@ void main() {
         phraseConfig?['mnemonicDerivedKey'], fileConfig?['mnemonicDerivedKey']);
     expect(phraseConfig?['mnemonicDerivedKey'], key);
     expect(await phraseRestore.read(), await fileRestore.read());
+  });
+
+  test('wallets are isolated and legacy vault migrates without losing credentials', () async {
+    final storage = _MemorySecureKeyValueStore();
+    final firstCredential = {'id': 'legacy-credential', 'name': 'Demo Holder'};
+    await storage.write(key: 'wallet_config_v1', value: jsonEncode({
+      'name': 'Legacy wallet',
+      'mnemonicDerivedKey': base64UrlEncode(List<int>.filled(32, 7)),
+      'deviceLockEnabled': false,
+      'createdAt': '2025-01-01T00:00:00.000Z',
+    }));
+    await storage.write(key: 'credential_vault_v1', value: jsonEncode([firstCredential]));
+    final store = VaultStore(storage: storage);
+    await store.saveVerifiedPhone('+919876543210');
+    final secondPhrase = MnemonicBackup.generate();
+    await store.createWallet('Travel wallet',
+        mnemonicDerivedKey: base64UrlEncode(MnemonicBackup.deriveWalletKey(secondPhrase)),
+        deviceLockEnabled: false);
+    await store.add({'id': 'second-credential'});
+
+    final wallets = await store.readWallets();
+    expect(wallets, hasLength(2));
+    expect(wallets.map((wallet) => wallet['nameMasked']), everyElement(isA<String>()));
+    expect(await store.read(), [{'id': 'second-credential'}]);
+    await expectLater(store.add(firstCredential), throwsStateError);
+    final legacy = wallets.singleWhere((wallet) => wallet['nameMasked'] == 'Le•••••');
+    await store.selectWallet(legacy['id'] as String);
+    expect((await store.readWalletConfig())?['name'], 'Legacy wallet');
+    expect(await store.read(), [firstCredential]);
+    expect(await storage.read(key: 'credential_vault_v1'), isNull);
+    final migrated = await storage.read(key: 'credential_vault_${legacy['id']}');
+    expect(migrated, contains('matchid-encrypted-vault-v1'));
+    expect(migrated, isNot(contains('legacy-credential')));
+  });
+
+  test('credential vault ciphertext cannot be opened with a different mnemonic key', () async {
+    final storage = _MemorySecureKeyValueStore();
+    final store = VaultStore(storage: storage);
+    await store.saveVerifiedPhone('+919876543210');
+    final phrase = MnemonicBackup.generate();
+    final key = base64UrlEncode(MnemonicBackup.deriveWalletKey(phrase));
+    await store.createWallet('Protected wallet',
+        mnemonicDerivedKey: key, deviceLockEnabled: false);
+    await store.add({'id': 'secret-document'});
+    final config = await store.readWalletConfig();
+    await storage.write(key: 'wallet_config_${(await store.readWallets()).single['id']}', value: jsonEncode({
+      ...config!,
+      'mnemonicDerivedKey': base64UrlEncode(List<int>.filled(32, 99)),
+    }));
+    await expectLater(store.read(), throwsA(anything));
   });
 }
 

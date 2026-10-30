@@ -14,7 +14,7 @@ void main() {
         .pumpWidget(MatchIdApp(vaultRepository: _TestVaultRepository()));
     await tester.pumpAndSettle();
 
-    expect(find.text('My credentials'), findsOneWidget);
+    expect(find.text('Test wallet'), findsOneWidget);
     expect(find.text('Wallet locked'), findsOneWidget);
 
     await tester.tap(find.text('Settings'));
@@ -135,6 +135,12 @@ class _TestVaultRepository implements VaultRepository {
   @override
   Future<Map<String, dynamic>?> readWalletConfig() async =>
       _hasWallet ? {'name': 'Test wallet'} : null;
+
+  @override
+  Future<List<Map<String, dynamic>>> readWallets() async => const [];
+
+  @override
+  Future<void> selectWallet(String walletId) async {}
 
   @override
   Future<String?> readVerifiedPhone() async => null;
