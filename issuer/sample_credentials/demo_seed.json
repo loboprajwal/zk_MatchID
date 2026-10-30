@@ -1,0 +1,67 @@
+[
+  {
+    "id": "holder-asha",
+    "phoneNumber": "+919999990001",
+    "name": "Asha Demo",
+    "dateOfBirth": "2000-04-12",
+    "nationality": "IND",
+    "city": "Bengaluru",
+    "state": "Karnataka",
+    "institutionId": 1042,
+    "monthlyIncome": 5200,
+    "aadhaarLast4": "1201",
+    "panLast4": "4D91"
+  },
+  {
+    "id": "holder-ravi",
+    "phoneNumber": "+919999990002",
+    "name": "Ravi Sample",
+    "dateOfBirth": "2005-08-23",
+    "nationality": "IND",
+    "city": "Mysuru",
+    "state": "Karnataka",
+    "institutionId": 2087,
+    "monthlyIncome": 3200,
+    "aadhaarLast4": "2202",
+    "panLast4": "5E82"
+  },
+  {
+    "id": "holder-noor",
+    "phoneNumber": "+919999990003",
+    "name": "Noor Example",
+    "dateOfBirth": "1997-02-11",
+    "nationality": "IND",
+    "city": "Kochi",
+    "state": "Kerala",
+    "institutionId": 3311,
+    "monthlyIncome": 6100,
+    "aadhaarLast4": "3303",
+    "panLast4": "6F73"
+  },
+  {
+    "id": "holder-isha",
+    "phoneNumber": "+919999990004",
+    "name": "Isha Fiction",
+    "dateOfBirth": "2002-11-06",
+    "nationality": "IND",
+    "city": "Pune",
+    "state": "Maharashtra",
+    "institutionId": 4509,
+    "monthlyIncome": 4700,
+    "aadhaarLast4": "4404",
+    "panLast4": "7A64"
+  },
+  {
+    "id": "holder-omar",
+    "phoneNumber": "+919999990005",
+    "name": "Omar Test",
+    "dateOfBirth": "1989-07-30",
+    "nationality": "IND",
+    "city": "Jaipur",
+    "state": "Rajasthan",
+    "institutionId": 5120,
+    "monthlyIncome": 8900,
+    "aadhaarLast4": "5505",
+    "panLast4": "8B55"
+  }
+]

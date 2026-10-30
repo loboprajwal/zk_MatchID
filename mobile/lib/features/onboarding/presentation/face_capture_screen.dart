@@ -19,8 +19,6 @@ class FaceCaptureResult {
   final bool movementChallengePassed;
 }
 
-enum _FaceChallengeStep { center, turnSide, turnOtherSide, blink, complete }
-
 abstract interface class FaceVerificationService {
   Future<List<Face>> detectFaces(InputImage image);
 
@@ -31,10 +29,8 @@ class MlKitFaceVerificationService implements FaceVerificationService {
   MlKitFaceVerificationService()
       : _detector = FaceDetector(
           options: FaceDetectorOptions(
-            performanceMode: FaceDetectorMode.fast,
             enableLandmarks: true,
             enableClassification: true,
-            minFaceSize: 0.12,
           ),
         );
 
@@ -49,7 +45,6 @@ class MlKitFaceVerificationService implements FaceVerificationService {
 }
 
 class MockFaceVerificationService implements FaceVerificationService {
-  MockFaceVerificationService(this.resultForImage);
 
   final Future<List<Face>> Function(InputImage image) resultForImage;
 
@@ -57,7 +52,6 @@ class MockFaceVerificationService implements FaceVerificationService {
   Future<List<Face>> detectFaces(InputImage image) => resultForImage(image);
 
   @override
-  Future<void> close() async {}
 }
 
 class FaceCaptureScreen extends StatefulWidget {
@@ -79,10 +73,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
   bool _initializing = false;
   bool _processingFrame = false;
   bool _faceCentered = false;
-  _FaceChallengeStep _challengeStep = _FaceChallengeStep.center;
-  int? _firstTurnSign;
-  bool _eyesWereOpen = false;
-  bool _eyesClosedAfterOpen = false;
   int _faceCount = 0;
   String? _error;
 
@@ -90,7 +80,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
       _camera?.value.isInitialized == true &&
       _faceCount == 1 &&
       _faceCentered &&
-      _challengeStep == _FaceChallengeStep.complete &&
       _capturedImage == null &&
       !_processingFrame;
 
@@ -245,14 +234,11 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
       final centered = faces.length == 1 &&
           _isFaceCentered(
             faces.single.boundingBox,
-            image.width,
-            image.height,
           );
       if (!mounted) return;
       setState(() {
         _faceCount = faces.length;
         _faceCentered = centered;
-        _advanceChallenge(faces.length == 1 ? faces.single : null, centered);
         _error = null;
       });
     } catch (_) {
@@ -265,45 +251,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
     }
   }
 
-  void _advanceChallenge(Face? face, bool centered) {
-    if (face == null || !centered) {
-      _challengeStep = _FaceChallengeStep.center;
-      _firstTurnSign = null;
-      _eyesWereOpen = false;
-      _eyesClosedAfterOpen = false;
       return;
-    }
-    switch (_challengeStep) {
-      case _FaceChallengeStep.center:
-        _challengeStep = _FaceChallengeStep.turnSide;
-        break;
-      case _FaceChallengeStep.turnSide:
-        final yaw = face.headEulerAngleY ?? 0;
-        if (yaw.abs() >= 15) {
-          _firstTurnSign = yaw.isNegative ? -1 : 1;
-          _challengeStep = _FaceChallengeStep.turnOtherSide;
-        }
-        break;
-      case _FaceChallengeStep.turnOtherSide:
-        final yaw = face.headEulerAngleY ?? 0;
-        if (yaw.abs() >= 15 && yaw.sign != _firstTurnSign) {
-          _challengeStep = _FaceChallengeStep.blink;
-        }
-        break;
-      case _FaceChallengeStep.blink:
-        final left = face.leftEyeOpenProbability;
-        final right = face.rightEyeOpenProbability;
-        if (left == null || right == null) break;
-        if (left > 0.7 && right > 0.7) _eyesWereOpen = true;
-        if (_eyesWereOpen && left < 0.25 && right < 0.25) {
-          _eyesClosedAfterOpen = true;
-        }
-        if (_eyesClosedAfterOpen && left > 0.65 && right > 0.65) {
-          _challengeStep = _FaceChallengeStep.complete;
-        }
-        break;
-      case _FaceChallengeStep.complete:
-        break;
     }
   }
 
@@ -317,9 +265,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
     final bytes = bytesBuilder.done().buffer.asUint8List();
     final format =
         Platform.isAndroid ? InputImageFormat.nv21 : InputImageFormat.bgra8888;
-    final rotation = InputImageRotationValue.fromRawValue(
-          camera.description.sensorOrientation,
-        ) ??
         InputImageRotation.rotation0deg;
     return InputImage.fromBytes(
       bytes: bytes,
@@ -336,7 +281,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
     final x = box.center.dx / imageWidth;
     final y = box.center.dy / imageHeight;
     final width = box.width / imageWidth;
-    return x >= 0.32 && x <= 0.68 && y >= 0.25 && y <= 0.75 && width >= 0.14;
   }
 
   String get _guidance {
@@ -344,13 +288,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
     if (_faceCount == 0) return 'Center your face in the frame';
     if (_faceCount > 1) return 'Only one face can be in the frame';
     if (!_faceCentered) return 'Move your face into the center of the frame';
-    return switch (_challengeStep) {
-      _FaceChallengeStep.center => 'Center your face in the frame',
-      _FaceChallengeStep.turnSide =>
-        'Turn your head toward one side of the frame',
-      _FaceChallengeStep.turnOtherSide => 'Now turn toward the other side',
-      _FaceChallengeStep.blink => 'Look at the camera and blink once',
-      _FaceChallengeStep.complete => 'Check complete · good lighting helps',
     };
   }
 
@@ -359,7 +296,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
     if (!_canCapture || camera == null) return;
     try {
       await camera.stopImageStream();
-      final photo = await camera.takePicture();
       final capturedFaces = await _faceService.detectFaces(
         InputImage.fromFilePath(photo.path),
       );
@@ -411,7 +347,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
   Future<void> _confirmCapture() async {
     final photo = _capturedImage;
     if (photo == null) return;
-    await _deletePhoto(photo);
     if (mounted) {
       Navigator.of(context).pop(const FaceCaptureResult(
         faceDetected: true,
@@ -542,7 +477,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen>
               ),
             const SizedBox(height: AppSpacing.md),
             const Text(
-              'Use even lighting and remove anything covering your face. The check asks you to turn toward both sides of the frame and blink. It is not a face identity match and cannot prevent every presentation attack. Images are deleted when you leave.',
               style: AppTypography.bodySmall,
             ),
           ],

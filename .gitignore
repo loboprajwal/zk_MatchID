@@ -14,20 +14,6 @@ circuits/build/
 *.r1cs
 *.zkey
 !mopro/assets/.gitkeep
-!mopro/assets/generic_verifier_final.zkey
-!mopro/assets/generic_verifier.wasm
-!mopro/assets/generic_verifier.r1cs
-!mopro/assets/verification_key.json
-!mopro/assets/DEV_CEREMONY_README.txt
-!mobile/assets/verification_key.json
-!mobile/assets/demo_proof_catalog.json
-
-# Local env (Amoy keys)
-contracts/.env
-**/.env
-!.env.example
-!contracts/.env.example
-
 
 # Mobile / Flutter
 .dart_tool/
@@ -53,7 +39,3 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
-mobile/dist/
-mobile/_legacy_parked/
-mobile/test_legacy_disabled/
-mobile/dist/

@@ -27,7 +27,6 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>MatchID uses the camera to scan verification QR codes and to capture a face for the demo wallet profile. Demo face images and a local template are saved only on this device and are never uploaded.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to unlock your encrypted identity credential vault.</string>
 	<key>UIApplicationSceneManifest</key>
